@@ -1,0 +1,19 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testEnvironment": "node",
+  "testRegex": "\\.e2e-spec\\.ts$",
+  "transform": {
+    "^.+\\.ts$": ["ts-jest", { "tsconfig": "tsconfig.test.json" }]
+  },
+  "moduleNameMapper": {
+    "@app/common/(.*)": "<rootDir>/../libs/common/src/$1",
+    "@app/database/(.*)": "<rootDir>/../libs/database/src/$1",
+    "@app/events/(.*)": "<rootDir>/../libs/events/src/$1",
+    "@app/matches/(.*)": "<rootDir>/../libs/matches/src/$1",
+    "@app/leaderboard/(.*)": "<rootDir>/../libs/leaderboard/src/$1",
+    "@app/auth/(.*)": "<rootDir>/../libs/auth/src/$1",
+    "@app/users/(.*)": "<rootDir>/../libs/users/src/$1",
+    "@app/jobs/(.*)": "<rootDir>/../libs/jobs/src/$1"
+  }
+}

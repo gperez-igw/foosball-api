@@ -1,0 +1,1868 @@
+---
+id: spec-api-001
+type: spec
+project: foosball-api
+sprint: "01"
+created_by: architect
+created_at: 2026-05-15
+status: draft
+requires_decision: false
+---
+
+openapi: "3.0.3"
+info:
+  title: Foosball API
+  version: "1.0.0"
+  description: |
+    REST API for recording, managing and visualizing foosball match results.
+    Authentication: Azure SSO (MSAL) → internal JWT (Bearer token, 15 min).
+    All /api/* endpoints require Authorization: Bearer <jwt> unless marked Public.
+    Swagger UI: GET /api/docs
+
+servers:
+  - url: /api/v1
+    description: API v1
+
+tags:
+  - name: auth
+    description: Azure SSO login, token refresh, logout, identity
+  - name: users
+    description: User profile management
+  - name: matches
+    description: Match lifecycle — create, players, result
+  - name: confirmations
+    description: Result confirmation quorum flow
+  - name: leaderboard
+    description: User and pair win leaderboards with time filters
+  - name: admin
+    description: Admin-only overrides and audit log (requires is_admin=true)
+  - name: health
+    description: Operational health check
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SECURITY SCHEMES
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Internal JWT issued by apps/auth after Azure SSO login. 15 min expiry.
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # SHARED SCHEMAS
+  # ───────────────────────────────────────────────────────────────────────────
+  schemas:
+
+    # ── Error envelope ────────────────────────────────────────────────────────
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              example: MATCH_ALREADY_CONFIRMED
+            message:
+              type: string
+              example: Cannot modify a confirmed match
+            details:
+              type: object
+              additionalProperties: true
+              example: { matchId: 42, status: "confirmed" }
+
+    # ── Pagination ─────────────────────────────────────────────────────────────
+    PaginationMeta:
+      type: object
+      required: [limit, hasMore]
+      properties:
+        limit:
+          type: integer
+          example: 20
+        hasMore:
+          type: boolean
+        nextCursor:
+          type: string
+          nullable: true
+          example: "eyJjcmVhdGVkQXQiOiIyMDI2LTA1LTE1VDEyOjAwOjAwLjAwMFoiLCJpZCI6NDJ9"
+
+    # ── Auth schemas ───────────────────────────────────────────────────────────
+    TokenPair:
+      type: object
+      required: [accessToken, refreshToken, expiresIn]
+      properties:
+        accessToken:
+          type: string
+          description: Signed JWT. Expires in 15 minutes.
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+        refreshToken:
+          type: string
+          description: Opaque refresh token. Single-use, 24h TTL.
+          example: "dGhpcyBpcyBhIHJhbmRvbSByZWZyZXNoIHRva2Vu"
+        expiresIn:
+          type: integer
+          description: Access token TTL in seconds.
+          example: 900
+
+    UserProfile:
+      type: object
+      required: [id, email, displayName, isAdmin, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        email:
+          type: string
+          format: email
+          example: "mario.rossi@company.com"
+        displayName:
+          type: string
+          example: "Mario Rossi"
+        isAdmin:
+          type: boolean
+          example: false
+        createdAt:
+          type: string
+          format: date-time
+
+    # ── Match schemas ──────────────────────────────────────────────────────────
+    MatchType:
+      type: string
+      enum: ["1v1", "2v2", "4v4"]
+      default: "2v2"
+
+    MatchStatus:
+      type: string
+      enum: [draft, playing, awaiting_confirmation, confirmed, cancelled]
+
+    MatchPlayer:
+      type: object
+      required: [userId, team, slot]
+      properties:
+        userId:
+          type: integer
+          format: int64
+          example: 5
+        team:
+          type: string
+          enum: [A, B]
+        slot:
+          type: integer
+          minimum: 1
+          maximum: 4
+          example: 1
+        position:
+          type: string
+          nullable: true
+          maxLength: 64
+          example: "goalkeeper"
+
+    MatchSummary:
+      type: object
+      required: [id, matchType, status, createdBy, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 42
+        matchType:
+          $ref: "#/components/schemas/MatchType"
+        status:
+          $ref: "#/components/schemas/MatchStatus"
+        scoreA:
+          type: integer
+          minimum: 0
+          nullable: true
+          example: 5
+        scoreB:
+          type: integer
+          minimum: 0
+          nullable: true
+          example: 3
+        createdBy:
+          type: integer
+          format: int64
+          nullable: true
+          example: 1
+        createdAt:
+          type: string
+          format: date-time
+        confirmedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    MatchDetail:
+      allOf:
+        - $ref: "#/components/schemas/MatchSummary"
+        - type: object
+          required: [players]
+          properties:
+            players:
+              type: array
+              items:
+                $ref: "#/components/schemas/MatchPlayer"
+
+    # ── Confirmation schemas ───────────────────────────────────────────────────
+    ConfirmationStatus:
+      type: object
+      required: [matchId, totalPlayers, confirmedCount, quorumRequired, quorumReached, confirmations]
+      properties:
+        matchId:
+          type: integer
+          format: int64
+          example: 42
+        totalPlayers:
+          type: integer
+          example: 4
+        confirmedCount:
+          type: integer
+          example: 2
+        quorumRequired:
+          type: integer
+          description: "floor(totalPlayers / 2) + 1"
+          example: 3
+        quorumReached:
+          type: boolean
+          example: false
+        confirmations:
+          type: array
+          items:
+            type: object
+            required: [userId, confirmedAt]
+            properties:
+              userId:
+                type: integer
+                format: int64
+              confirmedAt:
+                type: string
+                format: date-time
+
+    # ── Leaderboard schemas ────────────────────────────────────────────────────
+    TimeFilter:
+      type: string
+      enum: [week, month, year, total]
+      default: total
+
+    LeaderboardUserEntry:
+      type: object
+      required: [rank, userId, displayName, wins]
+      properties:
+        rank:
+          type: integer
+          example: 1
+        userId:
+          type: integer
+          format: int64
+          example: 3
+        displayName:
+          type: string
+          example: "Mario Rossi"
+        wins:
+          type: integer
+          example: 12
+
+    LeaderboardPairEntry:
+      type: object
+      required: [rank, userA, userB, wins]
+      properties:
+        rank:
+          type: integer
+          example: 1
+        userA:
+          type: object
+          required: [userId, displayName]
+          properties:
+            userId:
+              type: integer
+              format: int64
+            displayName:
+              type: string
+        userB:
+          type: object
+          required: [userId, displayName]
+          properties:
+            userId:
+              type: integer
+              format: int64
+            displayName:
+              type: string
+        wins:
+          type: integer
+          example: 8
+
+    # ── Audit log schemas ──────────────────────────────────────────────────────
+    AuditLogEntry:
+      type: object
+      required: [id, actorId, action, entityType, entityId, beforeData, afterData, createdAt]
+      properties:
+        id:
+          type: integer
+          format: int64
+          example: 1
+        actorId:
+          type: integer
+          format: int64
+          nullable: true
+          example: 2
+        action:
+          type: string
+          example: result_override
+        entityType:
+          type: string
+          example: match
+        entityId:
+          type: integer
+          format: int64
+          example: 42
+        beforeData:
+          type: object
+          additionalProperties: true
+          example: { scoreA: 5, scoreB: 3 }
+        afterData:
+          type: object
+          additionalProperties: true
+          example: { scoreA: 6, scoreB: 3 }
+        reason:
+          type: string
+          nullable: true
+          example: "Score entry error confirmed by both teams"
+        createdAt:
+          type: string
+          format: date-time
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATHS
+# ─────────────────────────────────────────────────────────────────────────────
+paths:
+
+  # ===========================================================================
+  # HEALTH
+  # ===========================================================================
+
+  /health:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns 200 if the API is up. Public endpoint.
+      security: []
+      responses:
+        "200":
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  # ===========================================================================
+  # AUTH — apps/auth routes (no /api/v1 prefix; served from apps/auth directly)
+  # These are documented here for Swagger completeness but served by apps/auth.
+  # ===========================================================================
+
+  /auth/login:
+    get:
+      operationId: authLogin
+      tags: [auth]
+      summary: Initiate Azure SSO login
+      description: |
+        Redirects the client to the Azure AD authorization endpoint.
+        The client follows the redirect; this endpoint does not return JSON.
+        Rate limited: 10 req/min per IP.
+      security: []
+      responses:
+        "302":
+          description: Redirect to Azure AD login page
+          headers:
+            Location:
+              schema:
+                type: string
+                example: "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?..."
+        "429":
+          description: Too Many Requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: RATE_LIMIT_EXCEEDED
+                  message: Too many login attempts
+
+  /auth/callback:
+    get:
+      operationId: authCallback
+      tags: [auth]
+      summary: Azure SSO OAuth2 callback
+      description: |
+        Azure AD redirects here after user authentication.
+        apps/auth validates the OIDC token, syncs user + is_admin to DB,
+        issues internal JWT + refresh token pair.
+        Returns TokenPair on success; redirects or returns error on failure.
+        Groups claim cap fallback: if `_claim_names.groups` present in token,
+        falls back to Microsoft Graph GET /v1.0/me/memberOf for group resolution.
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: session_state
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Login successful — returns JWT + refresh token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+              example:
+                accessToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOjEsImVtYWlsIjoibWFyaW8ucm9zc2lAY29tcGFueS5jb20iLCJpc19hZG1pbiI6ZmFsc2V9.abc"
+                refreshToken: "dGhpcyBpcyBhIHJhbmRvbSByZWZyZXNoIHRva2Vu"
+                expiresIn: 900
+        "400":
+          description: Invalid OAuth2 callback parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: INVALID_CALLBACK
+                  message: Missing or invalid authorization code
+        "503":
+          description: Azure Graph API unavailable (groups claim fallback failed)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: AZURE_GRAPH_UNAVAILABLE
+                  message: Could not resolve group membership via Microsoft Graph
+
+  /auth/refresh:
+    post:
+      operationId: authRefresh
+      tags: [auth]
+      summary: Refresh access token
+      description: |
+        Issues a new access token + refresh token pair using a valid refresh token.
+        The submitted refresh token is immediately invalidated (single-use rotation).
+        Rate limited: 10 req/min per IP.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+                  minLength: 32
+                  example: "dGhpcyBpcyBhIHJhbmRvbSByZWZyZXNoIHRva2Vu"
+      responses:
+        "200":
+          description: New token pair issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "400":
+          description: Missing or malformed request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Refresh token invalid, expired, or already used
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: INVALID_REFRESH_TOKEN
+                  message: Refresh token is invalid, expired, or already used
+        "429":
+          description: Too Many Requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: authLogout
+      tags: [auth]
+      summary: Logout and invalidate refresh token
+      description: |
+        Invalidates the submitted refresh token (sets used_at = NOW()).
+        The access token remains valid until its 15-min expiry (stateless JWT).
+        Clients should discard the access token client-side after logout.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+                  example: "dGhpcyBpcyBhIHJhbmRvbSByZWZyZXNoIHRva2Vu"
+      responses:
+        "204":
+          description: Logged out successfully
+        "400":
+          description: Missing refreshToken
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/me:
+    get:
+      operationId: authMe
+      tags: [auth]
+      summary: Get current user identity
+      description: Returns the authenticated user's profile from DB (includes is_admin).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Authenticated user profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          description: Missing or invalid Bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ===========================================================================
+  # USERS
+  # ===========================================================================
+
+  /users/me:
+    get:
+      operationId: getMyProfile
+      tags: [users]
+      summary: Get authenticated user profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    patch:
+      operationId: updateMyProfile
+      tags: [users]
+      summary: Update authenticated user display name
+      description: |
+        Users can only update their own displayName.
+        email and isAdmin are read-only (managed by Azure AD sync).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                displayName:
+                  type: string
+                  minLength: 1
+                  maxLength: 255
+                  example: "Mario R."
+            example:
+              displayName: "Mario R."
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: VALIDATION_ERROR
+                  message: displayName must be between 1 and 255 characters
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "422":
+          description: Unprocessable entity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ===========================================================================
+  # MATCHES
+  # ===========================================================================
+
+  /matches:
+    post:
+      operationId: createMatch
+      tags: [matches]
+      summary: Create a new match
+      description: |
+        Creates a match in `draft` status. The creator is automatically set to the
+        authenticated user. Players can be added after creation via POST /matches/:id/players.
+        Default matchType is 2v2.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                matchType:
+                  $ref: "#/components/schemas/MatchType"
+            example:
+              matchType: "2v2"
+      responses:
+        "201":
+          description: Match created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchDetail"
+              example:
+                id: 42
+                matchType: "2v2"
+                status: "draft"
+                scoreA: null
+                scoreB: null
+                createdBy: 1
+                createdAt: "2026-05-15T12:00:00.000Z"
+                confirmedAt: null
+                players: []
+        "400":
+          description: Invalid matchType
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    get:
+      operationId: listMatches
+      tags: [matches]
+      summary: List matches (cursor-based pagination)
+      description: |
+        Returns a paginated list of matches ordered by createdAt DESC.
+        Filters: status, matchType, createdBy. Cursor-based pagination.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/MatchStatus"
+        - name: matchType
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/MatchType"
+        - name: createdBy
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque cursor from previous page's nextCursor
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: List of matches
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/MatchSummary"
+                  pagination:
+                    $ref: "#/components/schemas/PaginationMeta"
+        "400":
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /matches/{matchId}:
+    parameters:
+      - name: matchId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+
+    get:
+      operationId: getMatch
+      tags: [matches]
+      summary: Get match detail
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Match detail with players
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchDetail"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: MATCH_NOT_FOUND
+                  message: Match 99 does not exist
+
+    patch:
+      operationId: updateMatch
+      tags: [matches]
+      summary: Update match (not allowed when awaiting_confirmation or confirmed)
+      description: |
+        Allowed updates: matchType (only if no players yet), scoreA, scoreB.
+        Blocked if status is `awaiting_confirmation` or `confirmed` — returns 409.
+        Only the match creator can update; other users get 403.
+        Moving from draft to playing happens automatically when all required
+        player slots are filled and result is submitted.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scoreA:
+                  type: integer
+                  minimum: 0
+                  maximum: 255
+                  nullable: true
+                scoreB:
+                  type: integer
+                  minimum: 0
+                  maximum: 255
+                  nullable: true
+            example:
+              scoreA: 6
+              scoreB: 3
+      responses:
+        "200":
+          description: Match updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchDetail"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller is not the match creator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: FORBIDDEN_NOT_CREATOR
+                  message: Only the match creator can update this match
+        "404":
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Match is in confirmation phase or already confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: MATCH_LOCKED
+                  message: Cannot modify a match in awaiting_confirmation or confirmed status
+                  details:
+                    matchId: 42
+                    status: awaiting_confirmation
+
+    delete:
+      operationId: deleteMatch
+      tags: [matches]
+      summary: Delete match (admin only)
+      description: |
+        Hard deletes the match record. Cascades to match_players, match_confirmations.
+        Audit log entry written for confirmed matches before deletion.
+        Admin only. Returns 403 if caller is not admin.
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Match deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Admin role required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: FORBIDDEN_ADMIN_REQUIRED
+                  message: This action requires admin privileges
+        "404":
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /matches/{matchId}/players:
+    parameters:
+      - name: matchId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+
+    post:
+      operationId: addPlayers
+      tags: [matches]
+      summary: Add players to a match
+      description: |
+        Adds one or more players to the match. Idempotent per (matchId, userId, team, slot).
+        Validates:
+        - Match must be in `draft` or `playing` status (not awaiting_confirmation or confirmed).
+        - Total players after insert must not exceed capacity (1v1=2, 2v2=4, 4v4=8).
+        - No duplicate slot per team.
+        - Users must exist.
+        Only the match creator can add players; returns 403 otherwise.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [players]
+              properties:
+                players:
+                  type: array
+                  minItems: 1
+                  maxItems: 8
+                  items:
+                    type: object
+                    required: [userId, team, slot]
+                    properties:
+                      userId:
+                        type: integer
+                        format: int64
+                        minimum: 1
+                      team:
+                        type: string
+                        enum: [A, B]
+                      slot:
+                        type: integer
+                        minimum: 1
+                        maximum: 4
+                      position:
+                        type: string
+                        maxLength: 64
+                        nullable: true
+            example:
+              players:
+                - userId: 1
+                  team: A
+                  slot: 1
+                - userId: 2
+                  team: A
+                  slot: 2
+                - userId: 3
+                  team: B
+                  slot: 1
+                - userId: 4
+                  team: B
+                  slot: 2
+      responses:
+        "200":
+          description: Players added; returns updated match detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchDetail"
+        "400":
+          description: Validation error (duplicate slot, capacity exceeded, user not found)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: SLOT_CONFLICT
+                  message: Team A slot 1 is already occupied
+                  details:
+                    matchId: 42
+                    team: A
+                    slot: 1
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not match creator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Match or user not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Match not in editable status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /matches/{matchId}/result:
+    parameters:
+      - name: matchId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+
+    post:
+      operationId: submitResult
+      tags: [matches]
+      summary: Submit match result (triggers confirmation phase)
+      description: |
+        Sets scoreA and scoreB and transitions match status to `awaiting_confirmation`.
+        Requirements:
+        - Match must be in `draft` or `playing` status.
+        - Both scores must be provided.
+        - All required player slots must be filled for the match type.
+        - Only the match creator can submit the result.
+        After result submission, a BullMQ event `match.result_submitted` is published
+        (EventEnvelope, version 1) to trigger leaderboard cache invalidation prep.
+        Note: result remains modifiable only if the creator cancels confirmation first
+        (see POST /matches/:id/confirmations/cancel).
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scoreA, scoreB]
+              properties:
+                scoreA:
+                  type: integer
+                  minimum: 0
+                  maximum: 255
+                  example: 5
+                scoreB:
+                  type: integer
+                  minimum: 0
+                  maximum: 255
+                  example: 3
+            example:
+              scoreA: 5
+              scoreB: 3
+      responses:
+        "200":
+          description: Result submitted; match now awaiting_confirmation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MatchDetail"
+              example:
+                id: 42
+                matchType: "2v2"
+                status: "awaiting_confirmation"
+                scoreA: 5
+                scoreB: 3
+                createdBy: 1
+                createdAt: "2026-05-15T12:00:00.000Z"
+                confirmedAt: null
+                players:
+                  - userId: 1
+                    team: A
+                    slot: 1
+                  - userId: 2
+                    team: A
+                    slot: 2
+                  - userId: 3
+                    team: B
+                    slot: 1
+                  - userId: 4
+                    team: B
+                    slot: 2
+        "400":
+          description: Missing scores, insufficient players, or invalid values
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: INSUFFICIENT_PLAYERS
+                  message: 2v2 match requires 4 players (2 per team); only 3 registered
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Not match creator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Match already in confirmation or confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ===========================================================================
+  # CONFIRMATIONS
+  # ===========================================================================
+
+  /matches/{matchId}/confirmations:
+    parameters:
+      - name: matchId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+
+    get:
+      operationId: getConfirmationStatus
+      tags: [confirmations]
+      summary: Get confirmation status for a match
+      description: |
+        Returns current quorum progress: total players, confirmed count,
+        quorum required (floor(totalPlayers/2)+1), and individual confirmations.
+        Available to any authenticated user (not just players of the match).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Confirmation status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmationStatus"
+              example:
+                matchId: 42
+                totalPlayers: 4
+                confirmedCount: 2
+                quorumRequired: 3
+                quorumReached: false
+                confirmations:
+                  - userId: 1
+                    confirmedAt: "2026-05-15T12:05:00.000Z"
+                  - userId: 3
+                    confirmedAt: "2026-05-15T12:06:00.000Z"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Match not in awaiting_confirmation status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: MATCH_NOT_AWAITING_CONFIRMATION
+                  message: Match is not in awaiting_confirmation status
+                  details:
+                    status: draft
+
+    post:
+      operationId: confirmResult
+      tags: [confirmations]
+      summary: Confirm match result (player vote)
+      description: |
+        Records the calling user's confirmation vote for the match result.
+        Rules:
+        - Caller must be a registered player of this match.
+        - Match must be in `awaiting_confirmation` status.
+        - Idempotent: confirming twice is a no-op (returns 200 with current state).
+        - When confirmedCount reaches quorumRequired:
+          - Match status → `confirmed`
+          - matches.confirmed_at set
+          - BullMQ event `match.confirmed` published (EventEnvelope v1)
+          - Leaderboard cache invalidated via `leaderboard-invalidate` event
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: |
+            Vote recorded. Returns updated confirmation status.
+            If quorum reached: quorumReached=true and match status is now confirmed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmationStatus"
+              example:
+                matchId: 42
+                totalPlayers: 4
+                confirmedCount: 3
+                quorumRequired: 3
+                quorumReached: true
+                confirmations:
+                  - userId: 1
+                    confirmedAt: "2026-05-15T12:05:00.000Z"
+                  - userId: 3
+                    confirmedAt: "2026-05-15T12:06:00.000Z"
+                  - userId: 4
+                    confirmedAt: "2026-05-15T12:07:00.000Z"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller is not a player in this match
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: NOT_A_PLAYER
+                  message: You are not registered as a player in this match
+        "404":
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Match not in awaiting_confirmation status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /matches/{matchId}/confirmations/cancel:
+    parameters:
+      - name: matchId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+
+    post:
+      operationId: cancelConfirmation
+      tags: [confirmations]
+      summary: Cancel confirmation phase (creator resets quorum to 0)
+      description: |
+        Only the match creator can call this endpoint.
+        Deletes ALL rows from match_confirmations for this matchId.
+        Reverts match status from `awaiting_confirmation` → `playing`.
+        Scores remain as-is (creator can then patch them via PATCH /matches/:id).
+        Not allowed if match is already `confirmed`.
+        On success publishes BullMQ event `match.confirmation_cancelled` (EventEnvelope v1).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Confirmation cancelled; returns updated confirmation status (count=0)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConfirmationStatus"
+              example:
+                matchId: 42
+                totalPlayers: 4
+                confirmedCount: 0
+                quorumRequired: 3
+                quorumReached: false
+                confirmations: []
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Caller is not match creator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: FORBIDDEN_NOT_CREATOR
+                  message: Only the match creator can cancel the confirmation phase
+        "404":
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Match is already confirmed (immutable) or not in confirmation phase
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: MATCH_ALREADY_CONFIRMED
+                  message: A confirmed match result cannot be cancelled
+                  details:
+                    matchId: 42
+                    status: confirmed
+
+  # ===========================================================================
+  # LEADERBOARD
+  # ===========================================================================
+
+  /leaderboard/users:
+    get:
+      operationId: getLeaderboardUsers
+      tags: [leaderboard]
+      summary: User win leaderboard with time filter
+      description: |
+        Returns ranked list of users by win count, filtered by time period.
+        Results are cached in Redis (TTL: 300s for week/month; 3600s for year/total).
+        Cache invalidated on match confirmation via BullMQ leaderboard-invalidate event.
+        Only counts `confirmed` matches where the user was on the winning team.
+        If Redis is unavailable, falls back to direct MySQL query (degraded mode).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: filter
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/TimeFilter"
+          example: week
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Leaderboard entries ordered by wins DESC
+          headers:
+            X-Cache:
+              schema:
+                type: string
+                enum: [HIT, MISS, BYPASS]
+              description: Redis cache status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [filter, data, generatedAt]
+                properties:
+                  filter:
+                    $ref: "#/components/schemas/TimeFilter"
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LeaderboardUserEntry"
+                  generatedAt:
+                    type: string
+                    format: date-time
+              example:
+                filter: week
+                generatedAt: "2026-05-15T12:00:00.000Z"
+                data:
+                  - rank: 1
+                    userId: 3
+                    displayName: "Mario Rossi"
+                    wins: 7
+                  - rank: 2
+                    userId: 5
+                    displayName: "Luca Bianchi"
+                    wins: 5
+        "400":
+          description: Invalid filter value
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /leaderboard/pairs:
+    get:
+      operationId: getLeaderboardPairs
+      tags: [leaderboard]
+      summary: Pair win leaderboard with time filter
+      description: |
+        Returns ranked list of 2-player pairs by win count, filtered by time period.
+        Pairs are identified by co-players on the same team in 2v2 (and 4v4) confirmed matches.
+        For 4v4, each unique 2-player combination on the winning team is counted independently.
+        Pair identity is (min(userA, userB), max(userA, userB)) — order-independent.
+        Redis-cached with same TTL policy as /leaderboard/users.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: filter
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/TimeFilter"
+          example: month
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          description: Pair leaderboard ordered by wins DESC
+          headers:
+            X-Cache:
+              schema:
+                type: string
+                enum: [HIT, MISS, BYPASS]
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [filter, data, generatedAt]
+                properties:
+                  filter:
+                    $ref: "#/components/schemas/TimeFilter"
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LeaderboardPairEntry"
+                  generatedAt:
+                    type: string
+                    format: date-time
+              example:
+                filter: month
+                generatedAt: "2026-05-15T12:00:00.000Z"
+                data:
+                  - rank: 1
+                    userA:
+                      userId: 3
+                      displayName: "Mario Rossi"
+                    userB:
+                      userId: 5
+                      displayName: "Luca Bianchi"
+                    wins: 5
+        "400":
+          description: Invalid filter value
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ===========================================================================
+  # ADMIN
+  # ===========================================================================
+
+  /admin/matches/{matchId}/result:
+    parameters:
+      - name: matchId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+
+    patch:
+      operationId: adminOverrideResult
+      tags: [admin]
+      summary: Admin override match result (confirmed match)
+      description: |
+        Allows an admin to correct the score of a confirmed match.
+        Writes an audit_log entry before applying the change (before/after snapshot).
+        Publishes BullMQ events: `audit-log-write` and `leaderboard-invalidate`.
+        Requires is_admin=true in JWT payload.
+        The match remains in `confirmed` status after the override.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scoreA, scoreB]
+              properties:
+                scoreA:
+                  type: integer
+                  minimum: 0
+                  maximum: 255
+                  example: 6
+                scoreB:
+                  type: integer
+                  minimum: 0
+                  maximum: 255
+                  example: 3
+                reason:
+                  type: string
+                  maxLength: 1000
+                  nullable: true
+                  example: "Score entry error confirmed by both teams"
+            example:
+              scoreA: 6
+              scoreB: 3
+              reason: "Score entry error confirmed by both teams"
+      responses:
+        "200":
+          description: Result overridden; returns updated match and audit log entry
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [match, auditLog]
+                properties:
+                  match:
+                    $ref: "#/components/schemas/MatchDetail"
+                  auditLog:
+                    $ref: "#/components/schemas/AuditLogEntry"
+              example:
+                match:
+                  id: 42
+                  matchType: "2v2"
+                  status: "confirmed"
+                  scoreA: 6
+                  scoreB: 3
+                  createdBy: 1
+                  createdAt: "2026-05-15T12:00:00.000Z"
+                  confirmedAt: "2026-05-15T12:30:00.000Z"
+                  players: []
+                auditLog:
+                  id: 1
+                  actorId: 2
+                  action: result_override
+                  entityType: match
+                  entityId: 42
+                  beforeData:
+                    scoreA: 5
+                    scoreB: 3
+                  afterData:
+                    scoreA: 6
+                    scoreB: 3
+                  reason: "Score entry error confirmed by both teams"
+                  createdAt: "2026-05-15T13:00:00.000Z"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Admin role required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: FORBIDDEN_ADMIN_REQUIRED
+                  message: This action requires admin privileges
+        "404":
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Match is not in confirmed status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: MATCH_NOT_CONFIRMED
+                  message: Admin result override only applies to confirmed matches
+                  details:
+                    status: awaiting_confirmation
+        "500":
+          description: Internal error (BullMQ audit-log event publish failed; operation rolled back)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: AUDIT_LOG_WRITE_FAILED
+                  message: Audit log could not be written; operation rolled back
+
+  /admin/matches/{matchId}:
+    parameters:
+      - name: matchId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+
+    delete:
+      operationId: adminDeleteMatch
+      tags: [admin]
+      summary: Admin delete any match (including confirmed)
+      description: |
+        Hard deletes any match regardless of status. Cascades to match_players,
+        match_confirmations. For confirmed matches, writes an audit_log entry
+        before deletion. Admin only.
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Match deleted
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Admin role required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /admin/matches/{matchId}/audit:
+    parameters:
+      - name: matchId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
+
+    get:
+      operationId: getMatchAuditLog
+      tags: [admin]
+      summary: Get audit log for a match (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of audit entries for the match, ordered by createdAt ASC
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuditLogEntry"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Admin role required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Match not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /admin/dlq:
+    get:
+      operationId: listDlqJobs
+      tags: [admin]
+      summary: List failed BullMQ jobs in DLQ (admin only)
+      description: Returns a list of jobs that exhausted all retry attempts across all queues.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: queue
+          in: query
+          required: false
+          description: Filter by original queue name (matches, leaderboard, audit)
+          schema:
+            type: string
+            enum: [matches, leaderboard, audit]
+      responses:
+        "200":
+          description: DLQ job list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        jobId:
+                          type: string
+                        queue:
+                          type: string
+                        name:
+                          type: string
+                        data:
+                          type: object
+                          additionalProperties: true
+                        failedReason:
+                          type: string
+                        attemptsMade:
+                          type: integer
+                        timestamp:
+                          type: integer
+                          format: int64
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Admin role required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /admin/dlq/{jobId}/retry:
+    parameters:
+      - name: jobId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      operationId: retryDlqJob
+      tags: [admin]
+      summary: Retry a DLQ job (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Job re-queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  status:
+                    type: string
+                    example: requeued
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Admin role required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Job not found in DLQ
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"

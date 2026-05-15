@@ -1,0 +1,43 @@
+{
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "resolvePackageJsonExports": true,
+    "esModuleInterop": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "removeComments": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "allowSyntheticDefaultImports": true,
+    "target": "ES2023",
+    "sourceMap": true,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "skipLibCheck": true,
+    "strictNullChecks": true,
+    "forceConsistentCasingInFileNames": true,
+    "noImplicitAny": false,
+    "strictBindCallApply": false,
+    "noFallthroughCasesInSwitch": false,
+    "paths": {
+      "@app/common": ["libs/common/src/index.ts"],
+      "@app/common/*": ["libs/common/src/*"],
+      "@app/database": ["libs/database/src/index.ts"],
+      "@app/database/*": ["libs/database/src/*"],
+      "@app/events": ["libs/events/src/index.ts"],
+      "@app/events/*": ["libs/events/src/*"],
+      "@app/matches": ["libs/matches/src/index.ts"],
+      "@app/matches/*": ["libs/matches/src/*"],
+      "@app/leaderboard": ["libs/leaderboard/src/index.ts"],
+      "@app/leaderboard/*": ["libs/leaderboard/src/*"],
+      "@app/auth": ["libs/auth/src/index.ts"],
+      "@app/auth/*": ["libs/auth/src/*"],
+      "@app/users": ["libs/users/src/index.ts"],
+      "@app/users/*": ["libs/users/src/*"],
+      "@app/jobs": ["libs/jobs/src/index.ts"],
+      "@app/jobs/*": ["libs/jobs/src/*"]
+    }
+  }
+}

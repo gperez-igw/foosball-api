@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm view *)",
+      "Bash(npm install *)",
+      "Bash(wait)",
+      "Bash(npx jest *)",
+      "Bash(./node_modules/.bin/jest *)",
+      "Bash(node *)",
+      "Read(//usr/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Read(//nix/**)",
+      "Bash(/home/gperez/.cursor-server/bin/93e603f703cd553a6bb3644711a3379bbbb31180/node *)",
+      "Bash(git add *)"
+    ]
+  }
+}

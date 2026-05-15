@@ -1,0 +1,37 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sleep infinity
+    working_dir: /workspaces/foosball
+    volumes:
+      - ..:/workspaces/foosball:cached
+    depends_on:
+      - redis
+      - mysql
+
+  redis:
+    image: redis:7.0
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    volumes:
+      - mysql-data:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: foosball
+      MYSQL_USER: foosball
+      MYSQL_PASSWORD: password
+
+volumes:
+  redis-data:
+  mysql-data:
+
+networks:
+  default:
+    driver: bridge

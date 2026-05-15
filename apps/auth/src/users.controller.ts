@@ -1,0 +1,52 @@
+import {
+  Controller,
+  Get,
+  Patch,
+  Req,
+  Body,
+  UseGuards,
+  BadRequestException,
+} from '@nestjs/common';
+import type { FastifyRequest } from 'fastify';
+import { JwtAuthGuard } from '@app/auth/jwt-auth.guard.js';
+import { UserService } from '@app/users/user.service.js';
+import type { JwtPayload } from '@app/auth/token.service.js';
+
+@Controller('users')
+@UseGuards(JwtAuthGuard)
+export class UsersController {
+  constructor(private readonly userService: UserService) {}
+
+  @Get('me')
+  async getProfile(@Req() req: FastifyRequest) {
+    const user = req.user as JwtPayload;
+    const entity = await this.userService.findById(user.sub);
+    return {
+      id: entity.id,
+      email: entity.email,
+      displayName: entity.displayName,
+      isAdmin: entity.isAdmin,
+      createdAt: entity.createdAt,
+    };
+  }
+
+  @Patch('me')
+  async updateProfile(@Req() req: FastifyRequest, @Body() body: { displayName?: string }) {
+    if (!body?.displayName) {
+      throw new BadRequestException({
+        code: 'VALIDATION_ERROR',
+        message: 'displayName is required',
+      });
+    }
+
+    const user = req.user as JwtPayload;
+    const updated = await this.userService.updateDisplayName(user.sub, body.displayName);
+    return {
+      id: updated.id,
+      email: updated.email,
+      displayName: updated.displayName,
+      isAdmin: updated.isAdmin,
+      createdAt: updated.createdAt,
+    };
+  }
+}
