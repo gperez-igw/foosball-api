@@ -1,12 +1,32 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
 import { QUEUE_MATCHES, QUEUE_LEADERBOARD, QUEUE_AUDIT, defaultJobOptions } from '@app/events';
+import { AuditLogEntity } from '@app/matches/entities/audit-log.entity.js';
 import { MatchConfirmedProcessor } from './processors/match-confirmed.processor.js';
 import { LeaderboardInvalidateProcessor } from './processors/leaderboard-invalidate.processor.js';
 import { AuditLogProcessor } from './processors/audit-log.processor.js';
 
 @Module({
   imports: [
+    ConfigModule.forRoot({ isGlobal: true }),
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        type: 'mysql',
+        host: config.getOrThrow<string>('DB_HOST'),
+        port: config.get<number>('DB_PORT', 3306),
+        username: config.getOrThrow<string>('DB_USER'),
+        password: config.getOrThrow<string>('DB_PASSWORD'),
+        database: config.getOrThrow<string>('DB_NAME'),
+        entities: [AuditLogEntity],
+        synchronize: false,
+        migrationsRun: false,
+        logging: config.get('NODE_ENV') === 'development',
+      }),
+    }),
+    TypeOrmModule.forFeature([AuditLogEntity]),
     BullModule.forRoot({
       connection: {
         host: process.env['REDIS_HOST'] ?? 'localhost',
