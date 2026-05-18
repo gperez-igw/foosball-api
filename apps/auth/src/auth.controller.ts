@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Body,
+  Query,
   Req,
   Res,
   HttpCode,
@@ -33,9 +34,17 @@ export class AuthController {
   @Public()
   @Throttle({ default: { ttl: 60000, limit: 10 } })
   @Get('login')
-  async login(@Res() reply: FastifyReply): Promise<void> {
-    const url = await this.authService.getLoginUrl();
-    reply.redirect(url, 302);
+  async login(
+    @Query('client') client: string,
+    @Res() reply: FastifyReply,
+  ): Promise<void> {
+    const clientType = client === 'mobile' ? 'mobile' : 'web';
+    const url = await this.authService.getLoginUrl(clientType);
+    if (clientType === 'mobile') {
+      reply.status(200).send({ url });
+    } else {
+      reply.redirect(url, 302);
+    }
   }
 
   @Public()

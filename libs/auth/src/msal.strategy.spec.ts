@@ -81,6 +81,8 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
         {
           provide: AzureAdService,
           useValue: {
+            webRedirectUri: 'http://localhost:3001/connect',
+            mobileRedirectUri: 'foosball://auth/callback',
             getAuthCodeUrl: jest.fn(),
             exchangeCode: jest.fn(),
           },
@@ -127,14 +129,18 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
       await expect(authService.handleCallback('code', '')).rejects.toThrow();
     });
 
-    it('calls MSAL exchangeCode with the supplied code and state', async () => {
+    it('calls MSAL exchangeCode with the supplied code, state, and webRedirectUri', async () => {
       azureAdService.exchangeCode.mockResolvedValue(msalResult() as any);
       userService.upsertFromAzure.mockResolvedValue(makeUser());
       tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
 
       await authService.handleCallback('my-code', 'my-state');
 
-      expect(azureAdService.exchangeCode).toHaveBeenCalledWith('my-code', 'my-state');
+      expect(azureAdService.exchangeCode).toHaveBeenCalledWith(
+        'my-code',
+        'my-state',
+        'http://localhost:3001/connect',
+      );
     });
   });
 

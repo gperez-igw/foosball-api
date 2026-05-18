@@ -10,6 +10,40 @@ status: milestone-ready
 requires_decision: false
 ---
 
+## Feature: mobile-sso-code-exchange — 2026-05-18
+
+**Spec**: `.agentflow/architect/specs/feature-mobile-auth-exchange.md`
+**Decision**: `.agentflow/decisions/decision-2026-05-18-1518-mobile-auth-code-exchange.md`
+
+### Summary
+Implemented Azure AD SSO "separate code exchange" flow (Flow B) for mobile/Tauri clients.
+- `GET /auth/login?client=mobile` returns `200 { url }` (JSON); web/default still returns 302.
+- `POST /connect/exchange` accepts `{ code, state }`, exchanges via MSAL using `AZURE_MOBILE_REDIRECT_URI`, returns TokenPair.
+- State is accepted best-effort (not strictly validated per user decision).
+- Backend remains confidential client; client secret never leaves the server.
+
+### Files changed
+- `libs/auth/src/azure-ad.service.ts` — added `webRedirectUri`/`mobileRedirectUri` props; `getAuthCodeUrl(redirectUri)` and `exchangeCode(code, state, redirectUri)` now take explicit `redirectUri` param
+- `libs/auth/src/auth.service.ts` — `getLoginUrl(client)` accepts `'web'|'mobile'` param; `handleCallback` passes `webRedirectUri`; new `handleMobileExchange(code, state)` method
+- `apps/auth/src/auth.controller.ts` — `login()` accepts `@Query('client')`, branches on mobile vs web
+- `apps/auth/src/connect.controller.ts` — new `POST /connect/exchange` handler (`mobileExchange`)
+- `libs/auth/src/azure-ad.service.spec.ts` — updated for new signatures; added mobile URI tests
+- `libs/auth/src/auth.service.spec.ts` — updated call sites; added `getLoginUrl`, `handleMobileExchange` tests
+- `libs/auth/src/msal.strategy.spec.ts` — updated mock to include URI props; fixed `exchangeCode` assertion arity
+- `apps/auth/src/auth.controller.spec.ts` — updated `login()` tests; added web/mobile branching tests
+- `apps/auth/src/connect.controller.spec.ts` — added `handleMobileExchange` mock; added 5 new POST /connect/exchange tests
+- `test/auth-sso.e2e-spec.ts` — added `AZURE_MOBILE_REDIRECT_URI` to TEST_CONFIG; added Scenarios 6b-1 through 6b-10
+
+### Build & Test Results
+- `npm run build:auth` — SUCCESS (0 errors)
+- `npx jest apps/auth libs/auth libs/users` — 142 tests, 13 suites, ALL PASS
+- `npm run test:e2e` — 50 tests, 8 suites, ALL PASS (+8 new Scenario 6b tests, was 42)
+- `npm run test:cov` — libs/auth: 98.27% statements, libs/users: 100% (both >= 80%)
+
+### Spec references
+- api.yaml: `authLogin` (updated, `client` query param), `mobileCodeExchange` (new `POST /connect/exchange`)
+- test-criteria.md: Scenario 6b (6b-1 through 6b-10)
+
 # Backend-Auth Progress — Sprint 01
 
 ## Summary

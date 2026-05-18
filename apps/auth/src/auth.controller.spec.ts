@@ -76,14 +76,37 @@ describe('AuthController', () => {
   // ── GET /auth/login ────────────────────────────────────────────────────────
 
   describe('login()', () => {
-    it('redirects to the Azure login URL returned by authService', async () => {
+    it('redirects (302) to the Azure login URL for web client (default)', async () => {
       authService.getLoginUrl.mockResolvedValue('https://login.microsoftonline.com/authorize?foo=bar');
       const reply = makeFastifyReply();
 
-      await controller.login(reply as any);
+      await controller.login(undefined as any, reply as any);
 
-      expect(authService.getLoginUrl).toHaveBeenCalledTimes(1);
+      expect(authService.getLoginUrl).toHaveBeenCalledWith('web');
       expect(reply.redirect).toHaveBeenCalledWith('https://login.microsoftonline.com/authorize?foo=bar', 302);
+    });
+
+    it('redirects (302) when client=web is explicit', async () => {
+      authService.getLoginUrl.mockResolvedValue('https://login.microsoftonline.com/authorize?foo=web');
+      const reply = makeFastifyReply();
+
+      await controller.login('web', reply as any);
+
+      expect(authService.getLoginUrl).toHaveBeenCalledWith('web');
+      expect(reply.redirect).toHaveBeenCalledWith('https://login.microsoftonline.com/authorize?foo=web', 302);
+    });
+
+    it('returns 200 JSON { url } when client=mobile', async () => {
+      const mobileUrl = 'https://login.microsoftonline.com/authorize?redirect_uri=foosball%3A%2F%2Fauth%2Fcallback';
+      authService.getLoginUrl.mockResolvedValue(mobileUrl);
+      const reply = makeFastifyReply();
+
+      await controller.login('mobile', reply as any);
+
+      expect(authService.getLoginUrl).toHaveBeenCalledWith('mobile');
+      expect(reply.status).toHaveBeenCalledWith(200);
+      expect(reply.send).toHaveBeenCalledWith({ url: mobileUrl });
+      expect(reply.redirect).not.toHaveBeenCalled();
     });
   });
 

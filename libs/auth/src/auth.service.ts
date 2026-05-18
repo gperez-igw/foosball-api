@@ -1,4 +1,5 @@
-import { Injectable, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import * as msal from '@azure/msal-node';
 import { AzureAdService } from './azure-ad.service.js';
 import { TokenService, TokenPair } from './token.service.js';
 import { RefreshTokenService } from './refresh-token.service.js';
@@ -6,7 +7,6 @@ import { UserService } from '@app/users/user.service';
 
 @Injectable()
 export class AuthService {
-  private readonly logger = new Logger(AuthService.name);
   private readonly refreshTtlMs = 24 * 60 * 60 * 1000;
 
   constructor(
@@ -16,8 +16,12 @@ export class AuthService {
     private readonly userService: UserService,
   ) {}
 
-  getLoginUrl(): Promise<string> {
-    return this.azureAdService.getAuthCodeUrl();
+  getLoginUrl(client: 'web' | 'mobile' = 'web'): Promise<string> {
+    const redirectUri =
+      client === 'mobile'
+        ? this.azureAdService.mobileRedirectUri
+        : this.azureAdService.webRedirectUri;
+    return this.azureAdService.getAuthCodeUrl(redirectUri);
   }
 
   async handleCallback(code: string, state: string): Promise<TokenPair> {
@@ -28,7 +32,49 @@ export class AuthService {
       });
     }
 
-    const msalResult = await this.azureAdService.exchangeCode(code, state);
+    const msalResult = await this.azureAdService.exchangeCode(
+      code,
+      state,
+      this.azureAdService.webRedirectUri,
+    );
+
+    const idTokenClaims = msalResult.idTokenClaims as Record<string, unknown>;
+    const azureOid = idTokenClaims['oid'] as string;
+    const email = (idTokenClaims['preferred_username'] ?? idTokenClaims['email']) as string;
+    const displayName = (idTokenClaims['name'] ?? email) as string;
+
+    const user = await this.userService.upsertFromAzure({ azureOid, email, displayName });
+    return this.tokenService.issueTokenPair(user);
+  }
+
+  async handleMobileExchange(code: string, state: string): Promise<TokenPair> {
+    if (!code || !state) {
+      throw new BadRequestException({
+        code: 'INVALID_CALLBACK',
+        message: 'Missing or invalid authorization code',
+      });
+    }
+
+    let msalResult: msal.AuthenticationResult;
+    try {
+      msalResult = await this.azureAdService.exchangeCode(
+        code,
+        state,
+        this.azureAdService.mobileRedirectUri,
+      );
+    } catch (err) {
+      throw new UnauthorizedException({
+        code: 'MOBILE_EXCHANGE_FAILED',
+        message: 'Azure AD rejected the authorization code',
+      });
+    }
+
+    if (!msalResult) {
+      throw new UnauthorizedException({
+        code: 'MOBILE_EXCHANGE_FAILED',
+        message: 'Azure AD rejected the authorization code',
+      });
+    }
 
     const idTokenClaims = msalResult.idTokenClaims as Record<string, unknown>;
     const azureOid = idTokenClaims['oid'] as string;

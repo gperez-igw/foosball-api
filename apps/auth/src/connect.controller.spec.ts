@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { UnauthorizedException } from '@nestjs/common';
 import { ConnectController } from './connect.controller';
 import { AuthService } from '@app/auth/auth.service';
 import type { FastifyReply } from 'fastify';
@@ -29,6 +30,7 @@ describe('ConnectController', () => {
           provide: AuthService,
           useValue: {
             handleCallback: jest.fn(),
+            handleMobileExchange: jest.fn(),
           },
         },
       ],
@@ -87,6 +89,66 @@ describe('ConnectController', () => {
 
       expect(reply.status).toHaveBeenCalledWith(400);
       expect(authService.handleCallback).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── POST /connect/exchange ─────────────────────────────────────────────────
+
+  describe('mobileExchange()', () => {
+    it('sends 200 with token pair on valid code and state', async () => {
+      const tokenPair = { accessToken: 'mobile-jwt', refreshToken: 'mobile-rt', expiresIn: 900 };
+      authService.handleMobileExchange.mockResolvedValue(tokenPair);
+      const reply = makeFastifyReply();
+
+      await controller.mobileExchange({ code: 'valid-code', state: 'valid-state' }, reply as any);
+
+      expect(authService.handleMobileExchange).toHaveBeenCalledWith('valid-code', 'valid-state');
+      expect(reply.status).toHaveBeenCalledWith(200);
+      expect(reply.send).toHaveBeenCalledWith(tokenPair);
+    });
+
+    it('sends 400 INVALID_CALLBACK when code is missing', async () => {
+      const reply = makeFastifyReply();
+
+      await controller.mobileExchange({ state: 'valid-state' }, reply as any);
+
+      expect(reply.status).toHaveBeenCalledWith(400);
+      expect(reply.send).toHaveBeenCalledWith({
+        error: { code: 'INVALID_CALLBACK', message: 'Missing or invalid authorization code' },
+      });
+      expect(authService.handleMobileExchange).not.toHaveBeenCalled();
+    });
+
+    it('sends 400 INVALID_CALLBACK when state is missing', async () => {
+      const reply = makeFastifyReply();
+
+      await controller.mobileExchange({ code: 'valid-code' }, reply as any);
+
+      expect(reply.status).toHaveBeenCalledWith(400);
+      expect(reply.send).toHaveBeenCalledWith({
+        error: { code: 'INVALID_CALLBACK', message: 'Missing or invalid authorization code' },
+      });
+      expect(authService.handleMobileExchange).not.toHaveBeenCalled();
+    });
+
+    it('sends 400 INVALID_CALLBACK when code is empty string', async () => {
+      const reply = makeFastifyReply();
+
+      await controller.mobileExchange({ code: '', state: 'valid-state' }, reply as any);
+
+      expect(reply.status).toHaveBeenCalledWith(400);
+      expect(authService.handleMobileExchange).not.toHaveBeenCalled();
+    });
+
+    it('re-throws UnauthorizedException from service (MSAL rejection)', async () => {
+      authService.handleMobileExchange.mockRejectedValue(
+        new UnauthorizedException({ code: 'MOBILE_EXCHANGE_FAILED', message: 'Azure AD rejected the authorization code' }),
+      );
+      const reply = makeFastifyReply();
+
+      await expect(
+        controller.mobileExchange({ code: 'stale-code', state: 'state' }, reply as any),
+      ).rejects.toThrow(UnauthorizedException);
     });
   });
 });

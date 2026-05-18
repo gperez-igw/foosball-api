@@ -54,6 +54,7 @@ const TEST_CONFIG: Record<string, string | number> = {
   AZURE_CLIENT_ID: 'test-client-id',
   AZURE_CLIENT_SECRET: 'test-client-secret',
   AZURE_REDIRECT_URI: 'http://localhost/connect',
+  AZURE_MOBILE_REDIRECT_URI: 'foosball://auth/callback',
   JWT_SECRET,
   DB_HOST: 'localhost',
   DB_PORT: 3306,
@@ -412,6 +413,183 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
       expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
       const errorCode = res.body?.code ?? res.body?.error ?? JSON.stringify(res.body);
       expect(errorCode).toMatch(/INVALID_REFRESH_TOKEN/);
+    });
+  });
+
+  // ── 6b-1. GET /auth/login?client=mobile returns 200 JSON { url } ────────────
+  describe('6b-1 — GET /auth/login?client=mobile returns 200 JSON { url }', () => {
+    it('returns status 200 and body { url } with the Azure authorize URL', async () => {
+      mockMsalClient.getAuthCodeUrl.mockResolvedValue(
+        'https://login.microsoftonline.com/authorize?client_id=test-client-id&redirect_uri=foosball%3A%2F%2Fauth%2Fcallback',
+      );
+
+      const res = await request(app.getHttpServer()).get('/auth/login?client=mobile');
+
+      expect(res.status).toBe(HttpStatus.OK);
+      expect(res.body).toHaveProperty('url');
+      expect(typeof res.body.url).toBe('string');
+      expect(res.body.url).toContain('login.microsoftonline.com');
+    });
+  });
+
+  // ── 6b-2. GET /auth/login (no client) still returns 302 ──────────────────
+  describe('6b-2 — GET /auth/login (no client param) returns 302 — web flow unchanged', () => {
+    it('returns 302 and Location header starts with Azure AD URL', async () => {
+      mockMsalClient.getAuthCodeUrl.mockResolvedValue(
+        'https://login.microsoftonline.com/test-tenant/oauth2/v2.0/authorize',
+      );
+
+      const res = await request(app.getHttpServer()).get('/auth/login');
+
+      expect(res.status).toBe(HttpStatus.FOUND);
+      expect(res.headers['location']).toMatch(/login\.microsoftonline\.com/);
+    });
+  });
+
+  // ── 6b-3. GET /auth/login?client=web returns 302 ─────────────────────────
+  describe('6b-3 — GET /auth/login?client=web returns 302', () => {
+    it('returns 302 when client=web is explicit', async () => {
+      mockMsalClient.getAuthCodeUrl.mockResolvedValue(
+        'https://login.microsoftonline.com/test-tenant/oauth2/v2.0/authorize',
+      );
+
+      const res = await request(app.getHttpServer()).get('/auth/login?client=web');
+
+      expect(res.status).toBe(HttpStatus.FOUND);
+      expect(res.headers['location']).toMatch(/login\.microsoftonline\.com/);
+    });
+  });
+
+  // ── 6b-4. POST /connect/exchange — happy path (new user) ─────────────────
+  describe('6b-4 — POST /connect/exchange — happy path (new user)', () => {
+    it('returns 200 with TokenPair and creates user with is_admin=false', async () => {
+      mockMsalClient.acquireTokenByCode.mockResolvedValue({
+        accessToken: 'mock-graph-access-token',
+        idTokenClaims: {
+          oid: 'oid-mobile-1',
+          preferred_username: 'mobile@company.com',
+          name: 'Mobile User',
+        },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/connect/exchange')
+        .send({ code: 'valid-code', state: 'valid-state' });
+
+      expect(res.status).toBe(HttpStatus.OK);
+      expect(res.body).toHaveProperty('accessToken');
+      expect(res.body).toHaveProperty('refreshToken');
+      expect(res.body.expiresIn).toBe(900);
+
+      const payload = jwtService.decode(res.body.accessToken) as Record<string, unknown>;
+      expect(payload.is_admin).toBe(false);
+      expect(payload.email).toBe('mobile@company.com');
+
+      const savedUser = users.get('oid-mobile-1');
+      expect(savedUser).toBeDefined();
+      expect(savedUser!.isAdmin).toBe(false);
+
+      const tokenRows = Array.from(tokens.values());
+      expect(tokenRows.length).toBeGreaterThan(0);
+      expect(tokenRows[tokenRows.length - 1].usedAt).toBeNull();
+    });
+  });
+
+  // ── 6b-5. POST /connect/exchange — existing admin user, is_admin preserved
+  describe('6b-5 — POST /connect/exchange — existing admin user, is_admin preserved', () => {
+    it('returns 200 with is_admin:true in JWT when DB row has is_admin=true', async () => {
+      await seedUser({ azureOid: 'oid-admin-mobile', isAdmin: true });
+      mockMsalClient.acquireTokenByCode.mockResolvedValue({
+        accessToken: 'mock-graph-access-token',
+        idTokenClaims: {
+          oid: 'oid-admin-mobile',
+          preferred_username: 'admin-mobile@company.com',
+          name: 'Admin Mobile',
+        },
+      });
+
+      const res = await request(app.getHttpServer())
+        .post('/connect/exchange')
+        .send({ code: 'valid-code', state: 'valid-state' });
+
+      expect(res.status).toBe(HttpStatus.OK);
+      const payload = jwtService.decode(res.body.accessToken) as Record<string, unknown>;
+      expect(payload.is_admin).toBe(true);
+
+      const savedUser = users.get('oid-admin-mobile');
+      expect(savedUser!.isAdmin).toBe(true);
+    });
+  });
+
+  // ── 6b-6. POST /connect/exchange — missing code rejected ──────────────────
+  describe('6b-6 — POST /connect/exchange — missing code rejected', () => {
+    it('returns 400 INVALID_CALLBACK when code is absent', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/connect/exchange')
+        .send({ state: 'valid-state' });
+
+      expect(res.status).toBe(HttpStatus.BAD_REQUEST);
+      expect(res.body?.error?.code).toBe('INVALID_CALLBACK');
+    });
+  });
+
+  // ── 6b-7. POST /connect/exchange — missing state rejected ─────────────────
+  describe('6b-7 — POST /connect/exchange — missing state rejected', () => {
+    it('returns 400 INVALID_CALLBACK when state is absent', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/connect/exchange')
+        .send({ code: 'valid-code' });
+
+      expect(res.status).toBe(HttpStatus.BAD_REQUEST);
+      expect(res.body?.error?.code).toBe('INVALID_CALLBACK');
+    });
+  });
+
+  // ── 6b-8. POST /connect/exchange — empty code rejected ────────────────────
+  describe('6b-8 — POST /connect/exchange — empty code rejected', () => {
+    it('returns 400 INVALID_CALLBACK when code is empty string', async () => {
+      const res = await request(app.getHttpServer())
+        .post('/connect/exchange')
+        .send({ code: '', state: 'valid-state' });
+
+      expect(res.status).toBe(HttpStatus.BAD_REQUEST);
+      expect(res.body?.error?.code).toBe('INVALID_CALLBACK');
+    });
+  });
+
+  // ── 6b-9. POST /connect/exchange — MSAL rejects code ─────────────────────
+  describe('6b-9 — POST /connect/exchange — MSAL rejects code (expired/already used)', () => {
+    it('returns 401 MOBILE_EXCHANGE_FAILED when MSAL throws', async () => {
+      mockMsalClient.acquireTokenByCode.mockRejectedValue(
+        new Error('AADSTS54005: Authorization code was already redeemed'),
+      );
+
+      const res = await request(app.getHttpServer())
+        .post('/connect/exchange')
+        .send({ code: 'stale-code', state: 'valid-state' });
+
+      expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
+      const errorCode =
+        res.body?.error?.code ?? res.body?.code ?? JSON.stringify(res.body);
+      expect(errorCode).toMatch(/MOBILE_EXCHANGE_FAILED/);
+    });
+  });
+
+  // ── 6b-10. POST /connect/exchange — redirect_uri mismatch ────────────────
+  describe('6b-10 — POST /connect/exchange — MSAL rejects redirect_uri mismatch', () => {
+    it('returns 401 MOBILE_EXCHANGE_FAILED on redirect_uri_mismatch error', async () => {
+      mockMsalClient.acquireTokenByCode.mockRejectedValue(
+        new Error('AADSTS50011: The redirect URI specified in the request does not match'),
+      );
+
+      const res = await request(app.getHttpServer())
+        .post('/connect/exchange')
+        .send({ code: 'some-code', state: 'valid-state' });
+
+      expect(res.status).toBe(HttpStatus.UNAUTHORIZED);
+      const errorCode =
+        res.body?.error?.code ?? res.body?.code ?? JSON.stringify(res.body);
+      expect(errorCode).toMatch(/MOBILE_EXCHANGE_FAILED/);
     });
   });
 
