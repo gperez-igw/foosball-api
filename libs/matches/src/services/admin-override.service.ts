@@ -71,15 +71,16 @@ export class AdminOverrideService {
       match.scoreB = dto.scoreB;
       await queryRunner.manager.save(match);
 
-      const auditLog = await this.matchRepository.saveAuditLog({
-        actorId,
-        action: 'result_override',
-        entityType: 'match',
-        entityId: matchId,
-        beforeData,
-        afterData,
-        reason: dto.reason ?? null,
-      });
+      // Save audit log inside the same transaction so it rolls back with the match update
+      const auditLogData = new AuditLogEntity();
+      auditLogData.actorId = actorId;
+      auditLogData.action = 'result_override';
+      auditLogData.entityType = 'match';
+      auditLogData.entityId = matchId;
+      auditLogData.beforeData = beforeData as Record<string, unknown>;
+      auditLogData.afterData = afterData as Record<string, unknown>;
+      auditLogData.reason = dto.reason ?? null;
+      const auditLog = await queryRunner.manager.save(AuditLogEntity, auditLogData);
 
       // Publish audit-log-write event — if this fails the whole transaction rolls back
       const auditEvent: EventEnvelope<AuditLogPayload> = {

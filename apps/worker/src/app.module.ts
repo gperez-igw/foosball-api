@@ -2,11 +2,14 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BullModule } from '@nestjs/bullmq';
+import Redis from 'ioredis';
 import { QUEUE_MATCHES, QUEUE_LEADERBOARD, QUEUE_AUDIT, defaultJobOptions } from '@app/events';
 import { AuditLogEntity } from '@app/matches/entities/audit-log.entity.js';
 import { MatchConfirmedProcessor } from './processors/match-confirmed.processor.js';
 import { LeaderboardInvalidateProcessor } from './processors/leaderboard-invalidate.processor.js';
 import { AuditLogProcessor } from './processors/audit-log.processor.js';
+
+export const WORKER_REDIS = 'WORKER_REDIS';
 
 @Module({
   imports: [
@@ -41,6 +44,18 @@ import { AuditLogProcessor } from './processors/audit-log.processor.js';
     ),
   ],
   providers: [
+    {
+      provide: WORKER_REDIS,
+      inject: [ConfigService],
+      useFactory: (config: ConfigService): Redis => {
+        return new Redis({
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: config.get<number>('REDIS_PORT', 6379),
+          password: config.get<string>('REDIS_PASSWORD') || undefined,
+          lazyConnect: true,
+        });
+      },
+    },
     MatchConfirmedProcessor,
     LeaderboardInvalidateProcessor,
     AuditLogProcessor,

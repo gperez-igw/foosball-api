@@ -12,6 +12,7 @@ import {
   UseGuards,
   Query,
   NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { AdminOverrideService } from '@app/matches/services/admin-override.service.js';
@@ -74,13 +75,19 @@ export class AdminController {
   @Post('dlq/:jobId/retry')
   @ApiOperation({ operationId: 'retryDlqJob', summary: 'Retry a DLQ job (admin only)' })
   @ApiParam({ name: 'jobId', type: 'string' })
+  @ApiQuery({ name: 'queue', required: true, enum: ['matches', 'leaderboard', 'audit'] })
   async retryDlqJob(@Param('jobId') jobId: string, @Query('queue') queue?: string) {
-    // Determine which queue to retry in; default to scanning all queues if not specified
-    const targetQueue = queue ?? 'matches';
+    if (!queue) {
+      throw new BadRequestException({
+        code: 'QUEUE_REQUIRED',
+        message: 'Query parameter "queue" is required for retry. Provide one of: matches, leaderboard, audit',
+      });
+    }
     try {
-      await this.dlqInspectorService.retryJob(targetQueue, jobId);
-    } catch (err: any) {
-      if (err?.message?.includes('not found')) {
+      await this.dlqInspectorService.retryJob(queue, jobId);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes('not found')) {
         throw new NotFoundException({ code: 'JOB_NOT_FOUND', message: `Job ${jobId} not found in DLQ` });
       }
       throw err;

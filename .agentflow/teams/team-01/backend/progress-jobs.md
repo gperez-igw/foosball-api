@@ -121,3 +121,59 @@ The `DlqInspectorModule` internally registers all 3 queues — backend-api just 
 ## Blockers
 
 None.
+
+---
+
+## Code Review Fixes (2026-05-18)
+
+### IMP-01 — Fixed
+**File**: `libs/events/src/queue-config.ts`
+Changed `MAX_RETRIES` default from `'5'` to `'3'` to match the architecture spec
+(3 retry attempts, exponential backoff). The `BULLMQ_MAX_RETRIES` env var override is
+preserved for operator flexibility.
+
+New test file `libs/events/src/queue-config.spec.ts` added with 3 assertions:
+- Default attempts = 3 when env var not set
+- Env var override works correctly
+- Exponential backoff with 1000ms delay
+
+### IMP-03 — Fixed
+**Files**: `apps/worker/src/app.module.ts`, `apps/worker/src/processors/leaderboard-invalidate.processor.ts`
+
+Redis instantiation moved out of the processor constructor into a NestJS DI provider factory
+in `AppModule`. Token `WORKER_REDIS` (exported constant) is used with `@Inject(WORKER_REDIS)`
+in the processor, mirroring the `LEADERBOARD_REDIS` pattern in `LeaderboardModule`.
+
+The spec file updated: `jest.mock('ioredis', ...)` workaround removed; the `WORKER_REDIS`
+token is now provided as a plain mock object `{ del: jest.fn() }` in the test module,
+enabling clean injection-based testing.
+
+### IMP-04 — Partially Fixed (cross-area blocker filed)
+**File**: `apps/worker/src/app.module.ts`
+The `WORKER_REDIS` factory no longer sets `db: 1` — it uses the default `db: 0`.
+
+**Blocker**: `libs/leaderboard/src/leaderboard.module.ts` (owned by backend-api) still
+uses `db: 1` in its `LEADERBOARD_REDIS` factory. This file is outside the backend-jobs
+write area. Cross-area fix required: backend-api must remove `db: 1` from
+`LeaderboardModule`'s Redis factory so both sides are on `db: 0`.
+Filed as `ISSUE-JOBS-001` in `issues.md`.
+
+### Build & Test Results
+
+```
+npm run build:worker   → SUCCESS (0 errors)
+npm run build:producer → SUCCESS (0 errors)
+
+npx jest libs/events apps/worker apps/producer
+
+Test Suites: 6 passed, 6 total
+Tests:       20 passed, 20 total
+
+Breakdown:
+  libs/events/src/event-envelope.spec.ts                               2 passed
+  libs/events/src/queue-config.spec.ts                                 3 passed  ← NEW
+  apps/worker/src/processors/match-confirmed.processor.spec.ts         4 passed
+  apps/worker/src/processors/leaderboard-invalidate.processor.spec.ts  3 passed  ← updated
+  apps/worker/src/processors/audit-log.processor.spec.ts               6 passed
+  apps/producer/src/schedulers/leaderboard-cron.service.spec.ts        2 passed
+```

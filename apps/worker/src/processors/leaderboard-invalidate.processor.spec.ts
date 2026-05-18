@@ -4,11 +4,7 @@ import { LeaderboardInvalidateProcessor } from './leaderboard-invalidate.process
 import type { Job } from 'bullmq';
 import type { EventEnvelope, LeaderboardInvalidatePayload } from '@app/events';
 import { QUEUE_LEADERBOARD } from '@app/events';
-
-jest.mock('ioredis', () => {
-  const { default: RedisMock } = jest.requireActual<{ default: typeof import('ioredis-mock') }>('ioredis-mock');
-  return { default: RedisMock, __esModule: true };
-});
+import { WORKER_REDIS } from '../app.module';
 
 function makeJob(
   overrides: Partial<EventEnvelope<LeaderboardInvalidatePayload>> = {},
@@ -18,7 +14,7 @@ function makeJob(
     id: 'job-2',
     name: 'leaderboard-invalidate',
     attemptsMade: 1,
-    opts: { attempts: 5 },
+    opts: { attempts: 3 },
     data: {
       eventType: 'leaderboard-invalidate',
       version: 1,
@@ -35,14 +31,21 @@ function makeJob(
 
 describe('LeaderboardInvalidateProcessor', () => {
   let processor: LeaderboardInvalidateProcessor;
+  let redisMock: { del: jest.Mock };
 
   beforeEach(async () => {
+    redisMock = { del: jest.fn().mockResolvedValue(8) };
+
     const module = await Test.createTestingModule({
       providers: [
         LeaderboardInvalidateProcessor,
         {
           provide: getQueueToken(QUEUE_LEADERBOARD),
           useValue: {},
+        },
+        {
+          provide: WORKER_REDIS,
+          useValue: redisMock,
         },
       ],
     }).compile();
@@ -51,10 +54,9 @@ describe('LeaderboardInvalidateProcessor', () => {
   });
 
   it('processes a valid v1 job and deletes Redis keys', async () => {
-    const redisSpy = jest.spyOn((processor as any).redis, 'del');
     const job = makeJob();
     await expect(processor.process(job)).resolves.toBeUndefined();
-    expect(redisSpy).toHaveBeenCalledWith(
+    expect(redisMock.del).toHaveBeenCalledWith(
       'leaderboard:users:week',
       'leaderboard:users:month',
       'leaderboard:users:year',
@@ -75,7 +77,7 @@ describe('LeaderboardInvalidateProcessor', () => {
 
   it('logs DLQ when attempts exhausted', () => {
     const logSpy = jest.spyOn((processor as any).logger, 'error');
-    const job = makeJob({}, { attemptsMade: 5, opts: { attempts: 5 } } as Partial<Job>);
+    const job = makeJob({}, { attemptsMade: 3, opts: { attempts: 3 } } as Partial<Job>);
     processor.onFailed(job, new Error('test'));
     expect(logSpy).toHaveBeenCalledWith(
       expect.stringContaining('exhausted all retries'),

@@ -1,53 +1,53 @@
 ---
 project: foosball-api
-phase: sprint-implementation
-status: paused
+phase: sprint-end
+status: completed
 mode: sprint
 current_sprint: 1
 briefing: briefings/foosball-api.md
 autonomy: supervised
-updated: 2026-05-15 17:46
+updated: 2026-05-18 10:05
 ---
 
 ## Current State
-Phase: Sprint-01 implementation **PAUSED** dall'utente subito dopo spawn. Team `sprint-01` creato, 7 task in pipeline, 3 implementer backend (api/auth/jobs) appena spawnati in parallelo e poi ricevuto shutdown request. Riprendere con `/resume` → rilanciare i 3 backend implementer (i task #1, #2, #3 sono ancora in_progress nel team task list).
-Sprint: 1.
+Phase: Sprint-01 — sprint close. Tutti i gate completati: implementazione + code
+review (Approved) + QA (PASS, 320 unit + 42 e2e, coverage 92.48%) + Architect
+milestone review (proceed) + documentazione. Artefatti di chiusura scritti
+(retrospective, summary, CHANGELOG). In attesa di conferma utente per commit PM
+files + apertura PR.
+Sprint: 1 — MVP foosball-api COMPLETO.
 
 ## Completed
-- 2026-05-15: Briefing approvato.
-- 2026-05-15 17:08: Setup PM approvato — Designer/Prototyper skip, backend N>1.
-- 2026-05-15 17:08: Backend split delegato all'Architect.
-- 2026-05-15 17:15: Setup Architect approvato — TypeORM, refresh token MySQL, 4 apps.
-- 2026-05-15 17:35: Specs sprint-01 approvate — quorum floor(n/2)+1, draw = 0 wins, leaderboard coppie su tutte le partite.
-- 2026-05-15 17:40: Migrazione monorepo materializzata (apps/api, apps/auth, apps/worker, apps/producer + 8 libs).
-- 2026-05-15 17:42: Resume sprint-01 approvato dall'utente.
+- 2026-05-15: Briefing, setup PM, setup Architect, specs sprint-01 — approvati.
+- 2026-05-15 17:46: Sprint-01 messo in pausa dall'utente.
+- 2026-05-18: `/resume` — audit-first scelto dall'utente.
+- 2026-05-18: Audit Architect → 3 implementer rilanciati → delta chiuso.
+- 2026-05-18: Code review Approved (6 finding fix + re-review).
+- 2026-05-18: QA gate PASS — 320 unit + 42 e2e, coverage 92.48%.
+- 2026-05-18: Architect milestone review — proceed, 0 deviazioni.
+- 2026-05-18: Docs (README, docs/API.md, docs/DEPLOYMENT.md).
+- 2026-05-18: Retrospective, summary, CHANGELOG scritti.
 
 ## Active Agents
-- (Nessuno — sprint paused 17:46. backend-api, backend-auth, backend-jobs ricevuto shutdown_request).
+- Nessuno. Sprint pre-sprint subagent terminati. Nessun team Agent Teams in uso
+  (ambiente senza i relativi tool).
 
 ## Decisions Made
-- Team: skip Designer/Prototyper, backend N>1 (3 impl + 1 reviewer), QA=1.
-- Stack: NestJS 11 + Fastify + TypeORM + MySQL + Redis + BullMQ + Azure MSAL + Swagger.
-- 4 apps: `apps/api`, `apps/auth`, `apps/worker`, `apps/producer`.
-- File ownership: backend-api (apps/api + libs/matches + libs/leaderboard); backend-auth (apps/auth + libs/auth + libs/users); backend-jobs (apps/worker + apps/producer + libs/events).
-- Refresh token MySQL, JWT 15min, is_admin cached.
-- Quorum: floor(n/2)+1 (1v1→2, 2v2→3, 4v4→5).
-- Draw: 0 wins per entrambe.
-- Leaderboard coppie: tutte le partite (4v4 → 6 coppie per win).
-- Audit log: soft FK, preserva history su delete match.
-- Migration order: auth → api → jobs.
-- Resume mode: procedi con sprint senza re-review della migrazione (decision-2026-05-15-1742-resume-sprint01.md).
+- 2026-05-18: Resume con audit-first (decision-2026-05-18-0834-resume-audit-first.md).
+- Stack/ownership/regole di business: vedi decisioni 2026-05-15 in decisions/.
 
-## Next Steps (al resume)
-1. `/resume` → rileggere `.agentflow/teams/team-01/backend/progress-{api,auth,jobs}.md` per capire dove si erano fermati.
-2. Re-spawnare i 3 implementer nel team esistente `sprint-01` con stessa prompt (template in `.claude/agents/pm.md`) — i task #1, #2, #3 esistono già in_progress, non ricrearli.
-3. Monitor → Code Reviewer (#4) → QA (#5) → Architect Review (#6) → Docs (#7).
-4. Sprint close checklist → PR.
-
-## Resume notes
-- Team `sprint-01` esiste già: NON chiamare TeamCreate di nuovo.
-- Task graph esiste già (1-7 con blockedBy): NON ricreare i task.
-- I 3 implementer erano stati spawnati alle ~17:45 e fermati alle 17:46 — probabilmente NON hanno scritto file di codice; verificare in apps/ libs/ prima di ripartire.
+## Next Steps
+- Conferma utente → commit dei file rimanenti (fix round, coverage test, PM files).
+- Apertura PR verso master/main (da concordare: branch dedicato vs commit diretto —
+  tutto lo sprint è stato su `master`).
+- Dopo merge: tornare in modalità interattiva o pianificare sprint-02.
 
 ## Blockers
 - Nessuno.
+
+## Note ambiente
+- Tool Agent Teams (TeamCreate/Task con team_name/SendMessage) NON disponibili.
+  PM ha coordinato spawnando subagent direttamente via Agent tool.
+- I subagent non possono scrivere file `report.md` (policy ambiente): il PM ha
+  scritto `.agentflow/teams/team-01/qa/report.md` con i dati verificati dalla QA.
+- Tech debt residuo non bloccante: NEW-01 + 3 nitpick (vedi summary.md).

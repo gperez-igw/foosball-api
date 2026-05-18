@@ -126,21 +126,65 @@ export function createMockMatchRepository(stores: TestStores) {
     findAuditLogs: jest.fn().mockImplementation(async (entityType: string, entityId: number) =>
       auditLogs.filter((l) => l.entityType === entityType && l.entityId === entityId),
     ),
-    getDataSource: jest.fn().mockReturnValue({
-      createQueryRunner: jest.fn().mockReturnValue({
+    getDataSource: jest.fn().mockImplementation(() => ({
+      createQueryRunner: jest.fn().mockImplementation(() => ({
         connect: jest.fn().mockResolvedValue(undefined),
         startTransaction: jest.fn().mockResolvedValue(undefined),
         commitTransaction: jest.fn().mockResolvedValue(undefined),
         rollbackTransaction: jest.fn().mockResolvedValue(undefined),
         release: jest.fn().mockResolvedValue(undefined),
         manager: {
-          save: jest.fn().mockImplementation(async (entity: MatchEntity) => {
-            matches.set(entity.id, entity);
+          /** Handles both save(entity) and save(EntityClass, data) patterns */
+          save: jest.fn().mockImplementation(async (entityOrClass: any, data?: any) => {
+            // save(EntityClass, data) — used for AuditLogEntity in AdminOverrideService
+            if (data !== undefined && typeof entityOrClass === 'function') {
+              const log = {
+                id: counter.value++,
+                createdAt: new Date(),
+                ...data,
+              } as unknown as AuditLogEntity;
+              auditLogs.push(log);
+              return log;
+            }
+            // save(entity) — used for MatchEntity and MatchConfirmationEntity
+            const entity = entityOrClass;
+            if (entity && typeof entity.id === 'number' && 'status' in entity) {
+              // MatchEntity
+              matches.set(entity.id, entity);
+              return entity;
+            }
+            if (entity && 'matchId' in entity && 'userId' in entity && !('status' in entity)) {
+              // MatchConfirmationEntity
+              const matchId: number = entity.matchId;
+              const conf = { matchId, userId: entity.userId, confirmedAt: new Date() } as unknown as MatchConfirmationEntity;
+              const existing = confirmations.get(matchId) ?? [];
+              confirmations.set(matchId, [...existing, conf]);
+              return conf;
+            }
             return entity;
           }),
+          create: jest.fn().mockImplementation((_EntityClass: any, data: any) => data),
+          /** findOne used by ConfirmationService for pessimistic_write lock on match */
+          findOne: jest.fn().mockImplementation(async (_EntityClass: any, options: any) => {
+            if (options?.where && 'id' in options.where) {
+              return matches.get(options.where.id) ?? null;
+            }
+            if (options?.where && 'matchId' in options.where && 'userId' in options.where) {
+              const confs = confirmations.get(options.where.matchId) ?? [];
+              return confs.find((c) => c.userId === options.where.userId) ?? null;
+            }
+            return null;
+          }),
+          /** find used by ConfirmationService to re-count confirmations inside tx */
+          find: jest.fn().mockImplementation(async (_EntityClass: any, options: any) => {
+            if (options?.where && 'matchId' in options.where) {
+              return confirmations.get(options.where.matchId) ?? [];
+            }
+            return [];
+          }),
         },
-      }),
-    }),
+      })),
+    })),
   };
 }
 

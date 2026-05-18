@@ -75,5 +75,9 @@ Coverage backend ≥ 80% (statement). CI: lint + unit + e2e + build tutte le 4 a
 - README e Swagger completi.
 - PR aperta al main con CHANGELOG e summary.
 
-## Next step
-PM spawna Architect in `specs` mode con questo plan come contesto, per produrre `api.yaml`, `schema.sql`, `test-criteria.md`.
+## Milestone 1
+status: reached
+
+Tutti i milestone M1-M4 consegnati come unico milestone implementativo.
+QA gate PASS (2026-05-18): 320 unit + 42 e2e test verdi, coverage statement 92.48%
+(tutte le libs > 80%), build pulita sulle 4 app, 7 scenari di accettazione coperti.

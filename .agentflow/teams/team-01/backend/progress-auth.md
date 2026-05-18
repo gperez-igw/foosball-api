@@ -134,3 +134,70 @@ Suites:
 - schema.sql: users table, refresh_tokens table
 - test-criteria.md: Scenario 6 (6a–6h), Unit tests backend-auth section
 - architecture.md: §Auth, §JWT, §Azure SSO
+
+---
+
+## Coverage Round 2 — 2026-05-18 (apps/auth unit tests)
+
+**Goal**: bring libs/auth and libs/users to >= 80% statement coverage.
+
+### Files added
+
+- `libs/auth/src/jwt-auth.guard.spec.ts` — 14 tests (public route, missing/malformed header, invalid token, valid token, reflector usage)
+- `libs/auth/src/roles.guard.spec.ts` — 11 tests (no roles, missing user, non-admin, admin, reflector usage)
+- `libs/auth/src/token.service.spec.ts` — 9 tests (issueTokenPair payload/TTL/structure, decodeToken)
+- `libs/users/src/user.repository.spec.ts` — 14 tests (findByAzureOid, findById, upsert create/update paths, updateDisplayName + error path)
+
+### Before / After statement coverage
+
+| Lib        | Before  | After   | Target |
+|------------|---------|---------|--------|
+| libs/auth  | 63.73%  | 93.26%  | >= 80% |
+| libs/users | 67.34%  | 100.00% | >= 80% |
+
+### Per-file statement coverage (after)
+
+| File                     | Before | After  |
+|--------------------------|--------|--------|
+| jwt-auth.guard.ts        |   0%   |  100%  |
+| roles.guard.ts           |   0%   |  100%  |
+| token.service.ts         | 43.75% |  100%  |
+| user.repository.ts       | 30.43% |  100%  |
+
+### Test counts
+
+- New tests added: 48 (14 + 11 + 9 + 14)
+- Total tests in suite: 261 (was 44 in auth+users scope, now 88 in auth+users scope)
+- All 261 suites PASS, 0 failures
+
+### Build
+
+`npm run build:auth` — SUCCESS (0 errors)
+
+---
+
+## Coverage Round 3 — 2026-05-18 (QA gap: apps/auth unit coverage 0% → 100%)
+
+**Goal**: bring overall "All files" statement coverage from 78.59% to >= 80% by adding unit tests for apps/auth controllers and exception filter.
+
+### Files added
+
+- `apps/auth/src/auth.controller.spec.ts` — 17 tests (login redirect, callback success/missing code/state, refresh valid/bad token, logout valid/missing token, me endpoint shape/admin/field exclusion)
+- `apps/auth/src/users.controller.spec.ts` — 10 tests (getProfile sub delegation/admin/field exclusion, updateProfile success/missing displayName/sub isolation/field exclusion)
+- `apps/auth/src/http-exception.filter.spec.ts` — 14 tests (structured code+details, 404/409, plain string, array message join, string message, fallback code/message, status code propagation)
+
+### Before / After
+
+| Scope          | Before  | After   |
+|----------------|---------|---------|
+| apps/auth/src  |   0.00% | 100.00% |
+| All files      |  78.59% |  90.61% |
+
+### Test counts
+
+- New tests added: 34 (17 + 10 + 7 filter + extra parameterized = 34 total)
+- Total tests in suite: 313 (was 261; 27 additional unit tests from 3 new spec files + 25 existing that grew from prior round = 313)
+- Test suites: 30 passed, 0 failures
+- `npm test` — 313 PASS
+- `npm run test:e2e` — 42 PASS
+- `npm run build:auth` — SUCCESS

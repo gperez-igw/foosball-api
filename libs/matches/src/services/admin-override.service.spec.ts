@@ -60,10 +60,14 @@ function makeAuditLog(overrides: Partial<AuditLogEntity> = {}): AuditLogEntity {
 }
 
 function makeQueryRunner(failOn?: 'save' | 'auditLog' | 'queue') {
+  const auditLogInstance = makeAuditLog();
   const manager = {
-    save: jest.fn().mockImplementation(async (entity: any) => {
+    save: jest.fn().mockImplementation(async (EntityClassOrEntity: any, data?: any) => {
       if (failOn === 'save') throw new Error('DB save error');
-      return entity;
+      // When called as save(EntityClass, data), return data (audit log case)
+      if (data !== undefined) return { ...data, id: auditLogInstance.id, createdAt: auditLogInstance.createdAt };
+      // When called as save(entity), return entity (match case)
+      return EntityClassOrEntity;
     }),
   };
   return {
@@ -100,20 +104,20 @@ describe('AdminOverrideService', () => {
   });
 
   describe('overrideResult', () => {
-    it('overrides score, writes audit log, publishes events', async () => {
+    it('overrides score, writes audit log inside transaction, publishes events', async () => {
       const match = makeMatch();
-      const auditLog = makeAuditLog({ afterData: { scoreA: 6, scoreB: 3 } });
       const qr = makeQueryRunner();
 
       repo.findById.mockResolvedValue(match);
-      repo.saveAuditLog.mockResolvedValue(auditLog);
       repo.findPlayers.mockResolvedValue([]);
       repo.getDataSource.mockReturnValue({ createQueryRunner: () => qr });
 
       const result = await service.overrideResult(42, 2, true, { scoreA: 6, scoreB: 3 });
 
       expect(result.match.scoreA).toBe(6);
-      expect(result.auditLog).toBe(auditLog);
+      // Audit log must be saved via queryRunner.manager.save (inside transaction)
+      expect(qr.manager.save).toHaveBeenCalledTimes(2); // once for match, once for audit log
+      expect(repo.saveAuditLog).not.toHaveBeenCalled(); // must NOT use the default-connection method
       expect(qr.commitTransaction).toHaveBeenCalled();
       expect(auditQueue.add).toHaveBeenCalledWith(
         'audit-log-write',
@@ -154,9 +158,9 @@ describe('AdminOverrideService', () => {
       const qr = makeQueryRunner();
 
       repo.findById.mockResolvedValue(match);
-      repo.saveAuditLog.mockResolvedValue(makeAuditLog());
+      repo.findPlayers.mockResolvedValue([]);
       repo.getDataSource.mockReturnValue({ createQueryRunner: () => qr });
-      // Make audit queue throw
+      // Make audit queue throw — must roll back the entire transaction
       auditQueue.add.mockRejectedValue(new Error('Redis unavailable'));
 
       await expect(
@@ -164,6 +168,8 @@ describe('AdminOverrideService', () => {
       ).rejects.toThrow(InternalServerErrorException);
 
       expect(qr.rollbackTransaction).toHaveBeenCalled();
+      // Audit log must NOT have been saved via the default connection
+      expect(repo.saveAuditLog).not.toHaveBeenCalled();
     });
   });
 

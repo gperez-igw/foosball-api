@@ -18,7 +18,7 @@ import { getRepositoryToken, TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
-import * as request from 'supertest';
+import request from 'supertest';
 import * as crypto from 'crypto';
 
 // ── Module-level mock — must appear before any import that uses @azure/msal-node

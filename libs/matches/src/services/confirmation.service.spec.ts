@@ -16,7 +16,51 @@ const mockMatchRepository = () => ({
   findConfirmation: jest.fn(),
   saveConfirmation: jest.fn(),
   deleteAllConfirmations: jest.fn(),
+  getDataSource: jest.fn(),
 });
+
+/**
+ * Builds a mock QueryRunner whose manager re-delegates to the repo mocks
+ * so tests can control per-call behavior via the existing repo mock setup.
+ * confirmedInTx: set to true to simulate the match already transitioned
+ *                to 'confirmed' by the time the lock is acquired.
+ */
+function makeConfirmQueryRunner(
+  repo: ReturnType<typeof mockMatchRepository>,
+  opts: { confirmedInTx?: boolean } = {},
+) {
+  const manager = {
+    findOne: jest.fn().mockImplementation(async (_EntityClass: any, options: any) => {
+      // Determine which entity is being queried from the where clause shape
+      if (options?.where && 'id' in options.where) {
+        // Match row lookup with lock
+        const match = await repo.findById(options.where.id);
+        if (opts.confirmedInTx && match) {
+          return { ...match, status: 'confirmed' };
+        }
+        return match;
+      }
+      // MatchConfirmation lookup (matchId + userId)
+      if (options?.where && 'userId' in options.where) {
+        return repo.findConfirmation(options.where.matchId, options.where.userId);
+      }
+      return null;
+    }),
+    find: jest.fn().mockImplementation(async (_EntityClass: any, options: any) => {
+      return repo.findConfirmations(options?.where?.matchId);
+    }),
+    create: jest.fn().mockImplementation((_EntityClass: any, data: any) => data),
+    save: jest.fn().mockImplementation(async (entity: any) => entity),
+  };
+  return {
+    connect: jest.fn().mockResolvedValue(undefined),
+    startTransaction: jest.fn().mockResolvedValue(undefined),
+    commitTransaction: jest.fn().mockResolvedValue(undefined),
+    rollbackTransaction: jest.fn().mockResolvedValue(undefined),
+    release: jest.fn().mockResolvedValue(undefined),
+    manager,
+  };
+}
 
 const mockQueue = () => ({
   add: jest.fn().mockResolvedValue(undefined),
@@ -115,59 +159,94 @@ describe('ConfirmationService', () => {
   });
 
   describe('confirm', () => {
-    it('records vote and returns status with quorumReached=false (2 of 3)', async () => {
+    it('records vote inside a transaction and returns quorumReached=false (2 of 4)', async () => {
       const match = makeMatch();
+      const qr = makeConfirmQueryRunner(repo);
       repo.findById.mockResolvedValue(match);
       repo.findPlayers.mockResolvedValue(fourPlayers);
       repo.findConfirmation.mockResolvedValue(null);
-      repo.saveConfirmation.mockResolvedValue(undefined);
       repo.findConfirmations.mockResolvedValue([makeConfirmation(1), makeConfirmation(3)]);
+      repo.getDataSource.mockReturnValue({ createQueryRunner: () => qr });
 
       const result = await service.confirm(42, 1);
       expect(result.confirmedCount).toBe(2);
       expect(result.quorumReached).toBe(false);
       expect(matchesQueue.add).not.toHaveBeenCalled();
+      // Confirm the transaction was opened and committed
+      expect(qr.startTransaction).toHaveBeenCalled();
+      expect(qr.commitTransaction).toHaveBeenCalled();
     });
 
-    it('is idempotent when user already confirmed', async () => {
+    it('is idempotent when user already confirmed (no duplicate save inside tx)', async () => {
       const match = makeMatch();
+      const qr = makeConfirmQueryRunner(repo);
       repo.findById.mockResolvedValue(match);
       repo.findPlayers.mockResolvedValue(fourPlayers);
       repo.findConfirmation.mockResolvedValue(makeConfirmation(1)); // already confirmed
       repo.findConfirmations.mockResolvedValue([makeConfirmation(1)]);
+      repo.getDataSource.mockReturnValue({ createQueryRunner: () => qr });
 
       const result = await service.confirm(42, 1);
-      expect(repo.saveConfirmation).not.toHaveBeenCalled();
+      // manager.create + manager.save must NOT be called for the confirmation row
+      expect(qr.manager.create).not.toHaveBeenCalled();
       expect(result.confirmedCount).toBe(1);
     });
 
-    it('reaches quorum, transitions to confirmed, publishes events', async () => {
+    it('reaches quorum, transitions to confirmed inside tx, publishes events exactly once', async () => {
       const match = makeMatch();
+      const qr = makeConfirmQueryRunner(repo);
       repo.findById.mockResolvedValue(match);
       repo.findPlayers.mockResolvedValue(fourPlayers);
       repo.findConfirmation.mockResolvedValue(null);
-      repo.saveConfirmation.mockResolvedValue(undefined);
-      // 3 confirmations → quorum reached
       repo.findConfirmations.mockResolvedValue([
         makeConfirmation(1),
         makeConfirmation(3),
         makeConfirmation(4),
       ]);
-      repo.save.mockResolvedValue({ ...match, status: 'confirmed', confirmedAt: new Date() });
+      repo.getDataSource.mockReturnValue({ createQueryRunner: () => qr });
 
       const result = await service.confirm(42, 4);
       expect(result.quorumReached).toBe(true);
-      expect(repo.save).toHaveBeenCalledWith(expect.objectContaining({ status: 'confirmed' }));
+      // Status update must be inside the transaction via manager.save
+      expect(qr.manager.save).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'confirmed' }),
+      );
+      // repo.save (default connection) must NOT be used for the status transition
+      expect(repo.save).not.toHaveBeenCalled();
+      expect(qr.commitTransaction).toHaveBeenCalledTimes(1);
+      expect(matchesQueue.add).toHaveBeenCalledTimes(1);
       expect(matchesQueue.add).toHaveBeenCalledWith(
         'match.confirmed',
         expect.objectContaining({ eventType: 'match.confirmed', version: 1 }),
         expect.anything(),
       );
+      expect(leaderboardQueue.add).toHaveBeenCalledTimes(1);
       expect(leaderboardQueue.add).toHaveBeenCalledWith(
         'leaderboard-invalidate',
         expect.objectContaining({ eventType: 'leaderboard-invalidate', version: 1 }),
         expect.anything(),
       );
+    });
+
+    it('is idempotent under concurrent lock: returns current state when match already confirmed in tx', async () => {
+      const match = makeMatch();
+      const qr = makeConfirmQueryRunner(repo, { confirmedInTx: true });
+      repo.findById.mockResolvedValue(match); // pre-check returns awaiting_confirmation
+      repo.findPlayers.mockResolvedValue(fourPlayers);
+      repo.findConfirmations.mockResolvedValue([
+        makeConfirmation(1),
+        makeConfirmation(3),
+        makeConfirmation(4),
+      ]);
+      repo.getDataSource.mockReturnValue({ createQueryRunner: () => qr });
+
+      const result = await service.confirm(42, 1);
+      // Should NOT publish events a second time
+      expect(matchesQueue.add).not.toHaveBeenCalled();
+      expect(leaderboardQueue.add).not.toHaveBeenCalled();
+      // Should rollback and return current state without error
+      expect(qr.rollbackTransaction).toHaveBeenCalled();
+      expect(result.quorumReached).toBe(true); // confirmedCount 3 >= quorum 3
     });
 
     it('throws ForbiddenException (NOT_A_PLAYER) when caller is not a player', async () => {

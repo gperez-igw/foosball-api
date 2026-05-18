@@ -1,26 +1,19 @@
 import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
-import { Logger } from '@nestjs/common';
+import { Logger, Inject } from '@nestjs/common';
 import type { Job } from 'bullmq';
+import type { Redis } from 'ioredis';
 import { QUEUE_LEADERBOARD } from '@app/events';
 import type { EventEnvelope, LeaderboardInvalidatePayload } from '@app/events';
-import Redis from 'ioredis';
+import { WORKER_REDIS } from '../app.module.js';
 
 const CACHE_KEY_PREFIX = process.env['QUEUE_PREFIX'] ?? 'leaderboard';
 
 @Processor(QUEUE_LEADERBOARD)
 export class LeaderboardInvalidateProcessor extends WorkerHost {
   private readonly logger = new Logger(LeaderboardInvalidateProcessor.name);
-  private readonly redis: Redis;
 
-  constructor() {
+  constructor(@Inject(WORKER_REDIS) private readonly redis: Redis) {
     super();
-    this.redis = new Redis({
-      host: process.env['REDIS_HOST'] ?? 'localhost',
-      port: parseInt(process.env['REDIS_PORT'] ?? '6379', 10),
-      password: process.env['REDIS_PASSWORD'] || undefined,
-      db: 1,
-      lazyConnect: true,
-    });
   }
 
   async process(
