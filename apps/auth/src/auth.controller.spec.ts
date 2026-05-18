@@ -51,7 +51,6 @@ describe('AuthController', () => {
           provide: AuthService,
           useValue: {
             getLoginUrl: jest.fn(),
-            handleCallback: jest.fn(),
             refresh: jest.fn(),
             logout: jest.fn(),
           },
@@ -85,51 +84,6 @@ describe('AuthController', () => {
 
       expect(authService.getLoginUrl).toHaveBeenCalledTimes(1);
       expect(reply.redirect).toHaveBeenCalledWith('https://login.microsoftonline.com/authorize?foo=bar', 302);
-    });
-  });
-
-  // ── GET /auth/callback ─────────────────────────────────────────────────────
-
-  describe('callback()', () => {
-    it('sends 200 with token pair when code and state are present', async () => {
-      const tokenPair = { accessToken: 'jwt', refreshToken: 'rt', expiresIn: 900 };
-      authService.handleCallback.mockResolvedValue(tokenPair);
-      const reply = makeFastifyReply();
-
-      await controller.callback('auth-code', 'state-value', reply as any);
-
-      expect(authService.handleCallback).toHaveBeenCalledWith('auth-code', 'state-value');
-      expect(reply.status).toHaveBeenCalledWith(200);
-      expect(reply.send).toHaveBeenCalledWith(tokenPair);
-    });
-
-    it('sends 400 error envelope when code is missing', async () => {
-      const reply = makeFastifyReply();
-
-      await controller.callback('', 'state-value', reply as any);
-
-      expect(reply.status).toHaveBeenCalledWith(400);
-      expect(reply.send).toHaveBeenCalledWith({
-        error: { code: 'INVALID_CALLBACK', message: 'Missing or invalid authorization code' },
-      });
-      expect(authService.handleCallback).not.toHaveBeenCalled();
-    });
-
-    it('sends 400 error envelope when state is missing', async () => {
-      const reply = makeFastifyReply();
-
-      await controller.callback('some-code', '', reply as any);
-
-      expect(reply.status).toHaveBeenCalledWith(400);
-      expect(authService.handleCallback).not.toHaveBeenCalled();
-    });
-
-    it('sends 400 error envelope when both code and state are missing', async () => {
-      const reply = makeFastifyReply();
-
-      await controller.callback(undefined as any, undefined as any, reply as any);
-
-      expect(reply.status).toHaveBeenCalledWith(400);
     });
   });
 

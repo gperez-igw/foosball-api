@@ -176,6 +176,29 @@ Suites:
 
 ---
 
+## Refactor — 2026-05-18 (callback route moved from /auth/callback to /connect)
+
+**Goal**: Move Azure AD SSO callback from `GET /auth/callback` to `GET /connect` (root path) to match the Reply URL configured in the Azure App Registration.
+
+### Files changed
+
+- `apps/auth/src/connect.controller.ts` — NEW. `@Controller()` (empty prefix) + `@Get('connect')`. Carries the callback handler verbatim from `AuthController`, with `@UseGuards(JwtAuthGuard)` at controller level and `@Public()` on the route.
+- `apps/auth/src/auth.controller.ts` — Removed `callback()` method and unused `Query` import. All other routes (`/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/me`) unchanged.
+- `apps/auth/src/app.module.ts` — Added `ConnectController` to `controllers` array.
+- `apps/auth/src/connect.controller.spec.ts` — NEW. 4 unit tests (200 success, 400 missing code, 400 missing state, 400 both missing).
+- `apps/auth/src/auth.controller.spec.ts` — Removed `callback()` unit tests (moved to connect.controller.spec.ts). Removed `handleCallback` from mock.
+- `test/auth-sso.e2e-spec.ts` — Added `ConnectController` to test module controllers. Changed all `/auth/callback?...` requests to `/connect?...`. Updated `AZURE_REDIRECT_URI` test config value to `http://localhost/connect`.
+
+### Build & test results
+
+```
+npm run build:auth    → SUCCESS (0 errors)
+npx jest apps/auth libs/auth  → 11 suites, 99 tests PASS
+npm run test:e2e      → 8 suites, 42 tests PASS
+```
+
+---
+
 ## Coverage Round 3 — 2026-05-18 (QA gap: apps/auth unit coverage 0% → 100%)
 
 **Goal**: bring overall "All files" statement coverage from 78.59% to >= 80% by adding unit tests for apps/auth controllers and exception filter.

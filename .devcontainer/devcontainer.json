@@ -25,7 +25,8 @@
 				"janisdd.vscode-edit-csv",
 				"eamodio.gitlens",
 				"sudhan.neondark-theme",
-				"esbenp.prettier-vscode"
+				"esbenp.prettier-vscode",
+				"anthropic.claude-code"
 			]
 		}
 	}

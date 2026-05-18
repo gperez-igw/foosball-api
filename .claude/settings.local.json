@@ -11,7 +11,25 @@
       "Read(//usr/local/bin/**)",
       "Read(//nix/**)",
       "Bash(/home/gperez/.cursor-server/bin/93e603f703cd553a6bb3644711a3379bbbb31180/node *)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(npm test *)",
+      "Bash(bash /workspaces/foosball/node_modules/.bin/jest --passWithNoTests)",
+      "Bash(xargs cat -n)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\({k: d.get\\(k\\) for k in ['scripts','jest']}, indent=2\\)\\)\")",
+      "Bash(npm run *)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(d.get\\('version'\\)\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('jest', {}\\), indent=2\\)\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d['jest']['moduleNameMapper'], indent=2\\)\\)\")",
+      "Bash(npx tsc *)",
+      "Bash(./node_modules/.bin/tsc --noEmit -p apps/api/tsconfig.app.json)",
+      "Bash(grep -Ei \"\\(=\\\\s*['\\\\\"][a-z0-9_\\\\-]{8,}['\\\\\"]\\)\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); deps=d.get\\('dependencies',{}\\); devdeps=d.get\\('devDependencies',{}\\); runtime=['@nestjs/common','@nestjs/core','@nestjs/platform-fastify','express','fastify','typeorm','bullmq','ioredis']; print\\('--- Runtime in devDeps ---'\\); [print\\(p\\) for p in runtime if p in devdeps]; print\\('--- Done ---'\\)\")",
+      "Bash(echo \"EXIT_CODE: $?\")",
+      "Bash(python3 -c ' *)",
+      "Bash(git fetch *)",
+      "Bash(sed -n '35,39p' .env)",
+      "Bash(sed -n '35,39p' .env.example)"
     ]
   }
 }

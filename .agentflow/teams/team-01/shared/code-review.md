@@ -249,3 +249,174 @@ regressions detected in the changed files.
 All six IMP findings are fully resolved. The one new issue (NEW-01) is minor
 and does not affect correctness or spec compliance. The codebase is clear for
 QA hand-off.
+
+---
+
+## Re-Review — /connect route move (2026-05-18)
+
+Focused review of the OAuth2 callback route rename from `GET /auth/callback` to
+`GET /connect`. Files examined:
+
+- `apps/auth/src/connect.controller.ts` (new)
+- `apps/auth/src/auth.controller.ts` (modified)
+- `apps/auth/src/app.module.ts` (modified)
+- `apps/auth/src/connect.controller.spec.ts` (new)
+- `apps/auth/src/auth.controller.spec.ts` (modified)
+- `test/auth-sso.e2e-spec.ts` (modified)
+- `.agentflow/architect/specs/api.yaml` (modified)
+- `docs/API.md` (modified)
+- `README.md` (modified)
+
+### Check Results
+
+**1. Route served at application root, no /auth prefix leak**
+
+`ConnectController` is decorated `@Controller()` (empty string prefix, line 7).
+The handler is `@Get('connect')` (line 13). With NestJS and Fastify this resolves
+to exactly `GET /connect`. The `AuthController` uses `@Controller('auth')`, so
+the new controller has no path overlap or prefix contamination.
+
+`app.module.ts:38` registers `[AuthController, ConnectController, UsersController]`
+in the module's `controllers` array. No prefix-level collision.
+
+**Verdict: PASS**
+
+**2. Access semantics — route is PUBLIC, no JWT required**
+
+`ConnectController` applies `@UseGuards(JwtAuthGuard)` at class level (line 8)
+and `@Public()` at method level (line 12).
+
+`JwtAuthGuard.canActivate` reads `IS_PUBLIC_KEY` via the reflector and returns
+`true` immediately when the metadata is present (`jwt-auth.guard.ts:25`).
+
+The global `APP_GUARD` in `app.module.ts:39-42` also uses `JwtAuthGuard`; since
+`@Public()` is read by the same guard implementation, the route is skipped by
+both the class-level guard and the global guard. Access semantics are identical
+to the old `/auth/callback` which was also `@Public()`.
+
+**Verdict: PASS**
+
+**3. Handler logic moved verbatim — no behavior change**
+
+The old `GET /auth/callback` handler in `auth.controller.ts` has been fully
+removed (no `handleCallback` or `callback` method present, confirmed by grep).
+
+`connect.controller.ts:19-30` reproduces the exact logic:
+- Guard: `if (!code || !state)` → 400 with `INVALID_CALLBACK` envelope
+- Happy path: `this.authService.handleCallback(code, state)` → 200 with token pair
+
+No additional transformation, default injection, or conditional branching was
+added. The move is a verbatim lift.
+
+**Verdict: PASS**
+
+**4. No dead code or unused imports in auth.controller.ts**
+
+`auth.controller.ts` imports: `Controller, Get, Post, Body, Req, Res, HttpCode,
+HttpStatus, BadRequestException, UseGuards` — all used by the remaining methods
+(`login`, `refresh`, `logout`, `me`). `FastifyReply` is used by `login`. No
+`handleCallback`-only import was left behind.
+
+**Verdict: PASS**
+
+**5. Throttle parity**
+
+The old `/auth/callback` had no `@Throttle` decorator. `GET /connect` in
+`ConnectController` has no `@Throttle` decorator. `GET /auth/login` and
+`POST /auth/refresh` both retain their `@Throttle({ default: { ttl: 60000, limit: 10 } })`
+decorators. Throttle configuration is unchanged from the previous approved state.
+
+**Verdict: PASS**
+
+**6. Unit tests — ConnectController**
+
+`connect.controller.spec.ts` covers four cases:
+- 200 + token pair when `code` and `state` present
+- 400 when `code` is empty string
+- 400 when `state` is empty string
+- 400 when both are `undefined`
+
+The guard is overridden correctly via `overrideGuard`. The `makeFastifyReply`
+helper correctly mocks `.status(n).send(...)` chaining. All four cases exercise
+the complete handler path and verify no call to `handleCallback` on error paths.
+
+**Verdict: PASS**
+
+**7. Unit tests — auth.controller.spec.ts cleanup**
+
+`auth.controller.spec.ts` contains no `callback()` describe block. The mock
+`AuthService` provider (`useValue`) does not include `handleCallback`. The file
+tests only `login`, `refresh`, `logout`, and `me`. Clean removal confirmed.
+
+**Verdict: PASS**
+
+**8. E2E test — hits /connect, ConnectController registered in test module**
+
+`test/auth-sso.e2e-spec.ts:31` imports `ConnectController` from
+`apps/auth/src/connect.controller`. Line 220 registers it in
+`controllers: [AuthController, ConnectController, UsersController]`.
+
+All six SSO scenario requests that previously would have hit `/auth/callback`
+now use `/connect?code=...&state=...` (lines 301, 334, 374, 440, 479).
+The test config sets `AZURE_REDIRECT_URI: 'http://localhost/connect'` (line 52)
+which is consistent with the new path.
+
+**Verdict: PASS**
+
+**9. Spec compliance — api.yaml**
+
+`api.yaml` defines the route at path `/connect` (line 404) with
+`operationId: authCallback`, `security: []`, and the correct 200/400/503
+response shapes. No `/auth/callback` path remains in the spec.
+
+**Verdict: PASS**
+
+**10. Docs consistency — docs/API.md and README.md**
+
+`docs/API.md` correctly documents `GET /connect` with the right query parameters,
+response shapes, and "Auth: Public" annotation.
+
+`README.md` has one stale inline comment: line 137 reads
+`# /auth/login, /auth/callback, /auth/me` — the `/auth/callback` fragment should
+be `/connect`. This is a comment in the project structure table only and has no
+runtime effect, but it is technically inconsistent.
+
+**Verdict: WARN (docs-only — no runtime impact)**
+
+### Auto-Reject Pattern Scan
+
+No new auto-reject patterns introduced by this change. The new controller
+contains no `dangerouslySetInnerHTML`, no hardcoded secrets, no empty catch
+blocks, no `eval()`, and is properly guarded by the existing `@Public()` +
+`JwtAuthGuard` pattern already approved in the original review.
+
+### Summary Table
+
+| Check | Result | Notes |
+|-------|--------|-------|
+| Route at app root, no /auth prefix | PASS | `@Controller()` + `@Get('connect')` |
+| Route is PUBLIC | PASS | `@Public()` + `JwtAuthGuard` reflector pattern |
+| Handler logic verbatim — no behavior change | PASS | Exact lift from removed method |
+| No dead code/imports in auth.controller.ts | PASS | All imports still in use |
+| Throttle parity (no @Throttle on callback) | PASS | No `@Throttle` on new handler |
+| ConnectController unit tests | PASS | 4 cases; correct mock setup |
+| auth.controller.spec.ts cleanup | PASS | No callback test residue |
+| E2E hits /connect; controller registered | PASS | All 6 scenarios updated |
+| api.yaml path renamed to /connect | PASS | Path and operationId correct |
+| docs/API.md updated | PASS | `GET /connect` documented correctly |
+| README.md updated | WARN | Line 137 comment still says `/auth/callback` |
+
+### Finding
+
+**NIT-02 (doc comment): README.md:137 stale reference**
+- File: `README.md:137`
+- Severity: nitpick — documentation only, no runtime effect
+- Text: `# /auth/login, /auth/callback, /auth/me`
+- Fix: Change `/auth/callback` to `/connect` in the comment.
+
+### Re-Review Verdict: Approved
+
+The route move is correct and complete. The handler logic, access semantics,
+throttle parity, test coverage, spec, and primary docs are all consistent.
+The single finding is a one-word stale comment in README.md that has no
+runtime or behavioral impact. This does not block QA or production.

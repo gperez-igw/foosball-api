@@ -1,8 +1,8 @@
 import { Controller, Get, Query, Res } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import type { FastifyReply } from 'fastify';
-import { LeaderboardService } from '@app/leaderboard/leaderboard.service.js';
-import { LeaderboardQueryDto } from '@app/leaderboard/dto/leaderboard-query.dto.js';
+import { LeaderboardService } from '@app/leaderboard/leaderboard.service';
+import { LeaderboardQueryDto } from '@app/leaderboard/dto/leaderboard-query.dto';
 
 @ApiTags('leaderboard')
 @ApiBearerAuth()

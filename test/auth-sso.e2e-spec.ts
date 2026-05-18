@@ -28,6 +28,7 @@ jest.mock('@azure/msal-node');
 import { AuthModule } from '../libs/auth/src/auth.module';
 import { UsersModule } from '../libs/users/src/users.module';
 import { AuthController } from '../apps/auth/src/auth.controller';
+import { ConnectController } from '../apps/auth/src/connect.controller';
 import { UsersController } from '../apps/auth/src/users.controller';
 import { JwtAuthGuard } from '../libs/auth/src/jwt-auth.guard';
 import { UserEntity } from '../libs/users/src/user.entity';
@@ -48,7 +49,7 @@ const TEST_CONFIG: Record<string, string | number> = {
   AZURE_TENANT_ID: 'test-tenant',
   AZURE_CLIENT_ID: 'test-client-id',
   AZURE_CLIENT_SECRET: 'test-client-secret',
-  AZURE_REDIRECT_URI: 'http://localhost/auth/callback',
+  AZURE_REDIRECT_URI: 'http://localhost/connect',
   ADMIN_AZURE_GROUP_ID: ADMIN_GROUP_ID,
   JWT_SECRET,
   DB_HOST: 'localhost',
@@ -216,7 +217,7 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
         AuthModule,
         UsersModule,
       ],
-      controllers: [AuthController, UsersController],
+      controllers: [AuthController, ConnectController, UsersController],
       providers: [
         {
           provide: APP_GUARD,
@@ -297,7 +298,7 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
       );
 
       const res = await request(app.getHttpServer()).get(
-        '/auth/callback?code=auth-code&state=state',
+        '/connect?code=auth-code&state=state',
       );
 
       expect(res.status).toBe(HttpStatus.OK);
@@ -329,7 +330,7 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
       mockMsalClient.acquireTokenByCode.mockResolvedValue(buildMsalResult(['other-group']));
 
       const res = await request(app.getHttpServer()).get(
-        '/auth/callback?code=auth-code&state=state',
+        '/connect?code=auth-code&state=state',
       );
 
       expect(res.status).toBe(HttpStatus.OK);
@@ -370,7 +371,7 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
       mockMsalClient.acquireTokenByCode.mockResolvedValue(buildMsalResult([ADMIN_GROUP_ID]));
 
       const callbackRes = await request(app.getHttpServer()).get(
-        '/auth/callback?code=auth-code&state=state',
+        '/connect?code=auth-code&state=state',
       );
       expect(callbackRes.status).toBe(HttpStatus.OK);
       const t1 = callbackRes.body.refreshToken as string;
@@ -436,7 +437,7 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
       });
 
       const res = await request(app.getHttpServer()).get(
-        '/auth/callback?code=auth-code&state=state',
+        '/connect?code=auth-code&state=state',
       );
 
       expect(res.status).toBe(HttpStatus.OK);
@@ -459,7 +460,7 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
         .mockResolvedValueOnce({ ok: false, status: 503 });
 
       const res = await request(app.getHttpServer()).get(
-        '/auth/callback?code=auth-code&state=state',
+        '/connect?code=auth-code&state=state',
       );
 
       expect(res.status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
@@ -475,7 +476,7 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
       mockMsalClient.acquireTokenByCode.mockResolvedValue(buildMsalResult([ADMIN_GROUP_ID]));
 
       const callbackRes = await request(app.getHttpServer()).get(
-        '/auth/callback?code=auth-code&state=state',
+        '/connect?code=auth-code&state=state',
       );
       expect(callbackRes.status).toBe(HttpStatus.OK);
       const t1 = callbackRes.body.refreshToken as string;

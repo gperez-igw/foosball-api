@@ -3,12 +3,13 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
-import { AuthModule } from '@app/auth/auth.module.js';
-import { UsersModule } from '@app/users/users.module.js';
-import { UserEntity } from '@app/users/user.entity.js';
-import { RefreshTokenEntity } from '@app/auth/refresh-token.entity.js';
-import { JwtAuthGuard } from '@app/auth/jwt-auth.guard.js';
+import { AuthModule } from '@app/auth/auth.module';
+import { UsersModule } from '@app/users/users.module';
+import { UserEntity } from '@app/users/user.entity';
+import { RefreshTokenEntity } from '@app/auth/refresh-token.entity';
+import { JwtAuthGuard } from '@app/auth/jwt-auth.guard';
 import { AuthController } from './auth.controller.js';
+import { ConnectController } from './connect.controller.js';
 import { UsersController } from './users.controller.js';
 
 @Module({
@@ -34,7 +35,7 @@ import { UsersController } from './users.controller.js';
     AuthModule,
     UsersModule,
   ],
-  controllers: [AuthController, UsersController],
+  controllers: [AuthController, ConnectController, UsersController],
   providers: [
     {
       provide: APP_GUARD,

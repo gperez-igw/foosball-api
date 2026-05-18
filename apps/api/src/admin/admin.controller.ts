@@ -15,8 +15,8 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
-import { AdminOverrideService } from '@app/matches/services/admin-override.service.js';
-import { AdminOverrideResultDto } from '@app/matches/dto/admin-override.dto.js';
+import { AdminOverrideService } from '@app/matches/services/admin-override.service';
+import { AdminOverrideResultDto } from '@app/matches/dto/admin-override.dto';
 import { Roles } from '@app/auth';
 import { RolesGuard } from '@app/auth';
 import type { JwtPayload } from '@app/auth';

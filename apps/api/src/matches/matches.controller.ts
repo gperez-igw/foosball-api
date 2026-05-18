@@ -21,15 +21,15 @@ import {
   ApiResponse,
   ApiBearerAuth,
 } from '@nestjs/swagger';
-import { MatchService } from '@app/matches/services/match.service.js';
-import { ConfirmationService } from '@app/matches/services/confirmation.service.js';
-import { AdminOverrideService } from '@app/matches/services/admin-override.service.js';
-import { CreateMatchDto } from '@app/matches/dto/create-match.dto.js';
-import { UpdateMatchDto } from '@app/matches/dto/update-match.dto.js';
-import { AddPlayersDto } from '@app/matches/dto/add-players.dto.js';
-import { SubmitResultDto } from '@app/matches/dto/submit-result.dto.js';
-import { ListMatchesDto } from '@app/matches/dto/list-matches.dto.js';
-import { AdminOverrideResultDto } from '@app/matches/dto/admin-override.dto.js';
+import { MatchService } from '@app/matches/services/match.service';
+import { ConfirmationService } from '@app/matches/services/confirmation.service';
+import { AdminOverrideService } from '@app/matches/services/admin-override.service';
+import { CreateMatchDto } from '@app/matches/dto/create-match.dto';
+import { UpdateMatchDto } from '@app/matches/dto/update-match.dto';
+import { AddPlayersDto } from '@app/matches/dto/add-players.dto';
+import { SubmitResultDto } from '@app/matches/dto/submit-result.dto';
+import { ListMatchesDto } from '@app/matches/dto/list-matches.dto';
+import { AdminOverrideResultDto } from '@app/matches/dto/admin-override.dto';
 import { Roles } from '@app/auth';
 import { RolesGuard } from '@app/auth';
 import type { JwtPayload } from '@app/auth';

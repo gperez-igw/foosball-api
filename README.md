@@ -134,7 +134,8 @@ foosball-api/
 │   ├── auth/                   # Azure SSO handler (Fastify, port 3001)
 │   │   └── src/
 │   │       ├── controllers/    # MSAL redirect/callback controllers
-│   │       ├── auth.controller.ts  # /auth/login, /auth/callback, /auth/me
+│   │       ├── auth.controller.ts  # /auth/login, /auth/refresh, /auth/logout, /auth/me
+│   │       ├── connect.controller.ts # /connect — Azure SSO OAuth2 callback
 │   │       ├── users.controller.ts # /users/me GET + PATCH
 │   │       └── main.ts         # Auth app bootstrap
 │   ├── worker/                 # BullMQ job consumer (no HTTP port)
@@ -218,8 +219,8 @@ foosball-api/
 1. Open **Azure Active Directory > App registrations** in the Azure Portal.
 2. Create or select the App Registration for foosball-api.
 3. Under **Authentication**, add a redirect URI pointing to `apps/auth`:
-   - Development: `http://localhost:3001/auth/callback`
-   - Production: `https://<your-domain>/auth/callback`
+   - Development: `http://localhost:3001/connect`
+   - Production: `https://<your-domain>/connect`
 4. Under **Token configuration**, click **Add groups claim**:
    - Select **Security groups**.
    - Enable the groups claim in **ID token** and **Access token**.
@@ -280,7 +281,7 @@ High-level endpoint groups (all under `/api/v1` except health and auth):
 | Group | Endpoints |
 |---|---|
 | Health | `GET /health` |
-| Auth | `GET /auth/login`, `GET /auth/callback`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` |
+| Auth | `GET /auth/login`, `GET /connect`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` |
 | Users | `GET /users/me`, `PATCH /users/me` |
 | Matches | `POST /matches`, `GET /matches`, `GET /matches/:id`, `PATCH /matches/:id`, `DELETE /matches/:id` |
 | Match players | `POST /matches/:id/players` |

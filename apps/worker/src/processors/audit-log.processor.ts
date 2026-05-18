@@ -5,7 +5,7 @@ import { Repository } from 'typeorm';
 import type { Job } from 'bullmq';
 import { QUEUE_AUDIT } from '@app/events';
 import type { EventEnvelope, AuditLogPayload } from '@app/events';
-import { AuditLogEntity } from '@app/matches/entities/audit-log.entity.js';
+import { AuditLogEntity } from '@app/matches/entities/audit-log.entity';
 
 @Injectable()
 @Processor(QUEUE_AUDIT)

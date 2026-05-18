@@ -17,7 +17,7 @@ Authorization: Bearer <access-token>
 **Token flow:**
 
 1. `GET /auth/login` — browser redirect to Azure AD
-2. `GET /auth/callback` — Azure AD returns here; the server issues an internal JWT + refresh token pair
+2. `GET /connect` — Azure AD returns here; the server issues an internal JWT + refresh token pair
 3. Use the `accessToken` as the Bearer token for all subsequent requests
 4. `POST /auth/refresh` — exchange a refresh token for a new token pair before the 15-minute access token expires
 5. `POST /auth/logout` — invalidate the refresh token
@@ -109,7 +109,7 @@ Redirects the browser to the Azure AD authorization endpoint. This endpoint does
 
 ---
 
-#### `GET /auth/callback` — Azure SSO OAuth2 callback
+#### `GET /connect` — Azure SSO OAuth2 callback
 
 **Auth:** Public
 
@@ -162,7 +162,7 @@ Submits a valid refresh token and receives a new token pair. The submitted token
 |---|---|---|---|
 | `refreshToken` | string | Yes | min 32 chars |
 
-**Response 200** — new `TokenPair` (same shape as `/auth/callback` response)
+**Response 200** — new `TokenPair` (same shape as `/connect` response)
 
 **Response 401**
 ```json

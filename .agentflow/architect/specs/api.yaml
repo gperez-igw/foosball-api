@@ -401,7 +401,7 @@ paths:
                   code: RATE_LIMIT_EXCEEDED
                   message: Too many login attempts
 
-  /auth/callback:
+  /connect:
     get:
       operationId: authCallback
       tags: [auth]

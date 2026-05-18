@@ -7,7 +7,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
-import { UserEntity } from '@app/users/user.entity.js';
+import { UserEntity } from '@app/users/user.entity';
 
 @Entity('refresh_tokens')
 export class RefreshTokenEntity {

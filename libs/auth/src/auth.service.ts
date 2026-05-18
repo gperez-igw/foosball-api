@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { AzureAdService } from './azure-ad.service.js';
 import { TokenService, TokenPair } from './token.service.js';
 import { RefreshTokenService } from './refresh-token.service.js';
-import { UserService } from '@app/users/user.service.js';
+import { UserService } from '@app/users/user.service';
 
 @Injectable()
 export class AuthService {

@@ -2,7 +2,6 @@ import {
   Controller,
   Get,
   Post,
-  Query,
   Body,
   Req,
   Res,
@@ -13,11 +12,11 @@ import {
 } from '@nestjs/common';
 import type { FastifyReply } from 'fastify';
 import { Throttle } from '@nestjs/throttler';
-import { AuthService } from '@app/auth/auth.service.js';
-import { UserService } from '@app/users/user.service.js';
-import { JwtAuthGuard } from '@app/auth/jwt-auth.guard.js';
-import { Public } from '@app/auth/public.decorator.js';
-import type { JwtPayload } from '@app/auth/token.service.js';
+import { AuthService } from '@app/auth/auth.service';
+import { UserService } from '@app/users/user.service';
+import { JwtAuthGuard } from '@app/auth/jwt-auth.guard';
+import { Public } from '@app/auth/public.decorator';
+import type { JwtPayload } from '@app/auth/token.service';
 
 interface AuthRequest {
   user: JwtPayload;
@@ -37,27 +36,6 @@ export class AuthController {
   async login(@Res() reply: FastifyReply): Promise<void> {
     const url = await this.authService.getLoginUrl();
     reply.redirect(url, 302);
-  }
-
-  @Public()
-  @Get('callback')
-  async callback(
-    @Query('code') code: string,
-    @Query('state') state: string,
-    @Res() reply: FastifyReply,
-  ): Promise<void> {
-    if (!code || !state) {
-      reply.status(400).send({
-        error: {
-          code: 'INVALID_CALLBACK',
-          message: 'Missing or invalid authorization code',
-        },
-      });
-      return;
-    }
-
-    const tokenPair = await this.authService.handleCallback(code, state);
-    reply.status(200).send(tokenPair);
   }
 
   @Public()

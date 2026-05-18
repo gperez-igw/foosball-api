@@ -36,6 +36,7 @@
   "dependencies": {
     "@azure/msal-node": "2.16.3",
     "@fastify/cors": "11.2.0",
+    "@fastify/static": "^9.1.3",
     "@microsoft/microsoft-graph-client": "3.0.7",
     "@nestjs/bullmq": "11.0.4",
     "@nestjs/common": "^11.0.1",
@@ -90,11 +91,23 @@
     "typescript-eslint": "^8.20.0"
   },
   "jest": {
-    "moduleFileExtensions": ["js", "json", "ts"],
-    "roots": ["<rootDir>/apps", "<rootDir>/libs"],
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "roots": [
+      "<rootDir>/apps",
+      "<rootDir>/libs"
+    ],
     "testRegex": ".*\\.spec\\.ts$",
     "transform": {
-      "^.+\\.ts$": ["ts-jest", { "tsconfig": "tsconfig.test.json" }]
+      "^.+\\.ts$": [
+        "ts-jest",
+        {
+          "tsconfig": "tsconfig.test.json"
+        }
+      ]
     },
     "collectCoverageFrom": [
       "apps/**/*.ts",

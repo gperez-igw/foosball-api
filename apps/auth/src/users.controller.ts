@@ -7,9 +7,9 @@ import {
   UseGuards,
   BadRequestException,
 } from '@nestjs/common';
-import { JwtAuthGuard } from '@app/auth/jwt-auth.guard.js';
-import { UserService } from '@app/users/user.service.js';
-import type { JwtPayload } from '@app/auth/token.service.js';
+import { JwtAuthGuard } from '@app/auth/jwt-auth.guard';
+import { UserService } from '@app/users/user.service';
+import type { JwtPayload } from '@app/auth/token.service';
 
 interface AuthRequest {
   user: JwtPayload;
