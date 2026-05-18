@@ -1,5 +1,4 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AzureAdService } from './azure-ad.service';
 
@@ -12,14 +11,10 @@ jest.mock('@azure/msal-node', () => ({
         oid: 'azure-oid-123',
         preferred_username: 'mario.rossi@company.com',
         name: 'Mario Rossi',
-        groups: ['admin-group-id'],
       },
     }),
   })),
 }));
-
-const mockFetch = jest.fn();
-global.fetch = mockFetch;
 
 describe('AzureAdService', () => {
   let service: AzureAdService;
@@ -45,41 +40,22 @@ describe('AzureAdService', () => {
     }).compile();
 
     service = module.get<AzureAdService>(AzureAdService);
-    mockFetch.mockReset();
   });
 
-  describe('getGroupsFromGraph', () => {
-    it('should return group IDs from Graph API', async () => {
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ value: [{ id: 'group-1' }, { id: 'group-2' }] }),
-      });
-
-      const groups = await service.getGroupsFromGraph('mock-access-token');
-      expect(groups).toEqual(['group-1', 'group-2']);
+  describe('getAuthCodeUrl', () => {
+    it('should return an authorization URL', async () => {
+      const url = await service.getAuthCodeUrl();
+      expect(typeof url).toBe('string');
+      expect(url).toContain('login.microsoftonline.com');
     });
+  });
 
-    it('should retry once on transient 503 and succeed on second attempt', async () => {
-      mockFetch
-        .mockResolvedValueOnce({ ok: false, status: 503 })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: async () => ({ value: [{ id: 'group-1' }] }),
-        });
-
-      const groups = await service.getGroupsFromGraph('mock-access-token');
-      expect(groups).toEqual(['group-1']);
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-
-    it('should throw ServiceUnavailableException when both attempts fail', async () => {
-      mockFetch
-        .mockResolvedValueOnce({ ok: false, status: 503 })
-        .mockResolvedValueOnce({ ok: false, status: 503 });
-
-      await expect(service.getGroupsFromGraph('mock-access-token')).rejects.toThrow(
-        ServiceUnavailableException,
-      );
+  describe('exchangeCode', () => {
+    it('should return an AuthenticationResult on success', async () => {
+      const result = await service.exchangeCode('auth-code', 'state');
+      expect(result).toBeDefined();
+      expect(result.accessToken).toBe('mock-access-token');
+      expect((result.idTokenClaims as Record<string, unknown>)['oid']).toBe('azure-oid-123');
     });
   });
 });

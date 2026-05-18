@@ -22,14 +22,12 @@ export class UserRepository {
     azureOid: string;
     email: string;
     displayName: string;
-    isAdmin: boolean;
   }): Promise<UserEntity> {
     const existing = await this.findByAzureOid(data.azureOid);
 
     if (existing) {
       existing.email = data.email;
       existing.displayName = data.displayName;
-      existing.isAdmin = data.isAdmin;
       return this.repo.save(existing);
     }
 
@@ -37,7 +35,6 @@ export class UserRepository {
       azureOid: data.azureOid,
       email: data.email,
       displayName: data.displayName,
-      isAdmin: data.isAdmin,
     });
     return this.repo.save(user);
   }

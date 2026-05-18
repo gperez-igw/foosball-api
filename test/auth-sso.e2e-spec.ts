@@ -8,13 +8,18 @@
  * - TypeORM: repositories injected as in-memory mock objects
  * - JWT: real @nestjs/jwt with a fixed test secret so we can decode tokens
  * - Config: overrideProvider for ConfigService with fixed test values
+ *
+ * Admin status (is_admin) is DB-managed: the callback upsert no longer reads
+ * or writes is_admin from/to Azure AD group claims. Scenarios 6f/6g (Graph
+ * fallback) are removed. 6a: new user → is_admin=false (DB default).
+ * 6b: pre-existing admin row → is_admin preserved after login.
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, HttpStatus, Module } from '@nestjs/common';
+import { INestApplication, HttpStatus } from '@nestjs/common';
 import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { JwtService, JwtModule } from '@nestjs/jwt';
-import { getRepositoryToken, TypeOrmModule } from '@nestjs/typeorm';
+import { getRepositoryToken } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
@@ -38,7 +43,6 @@ import { UserRepository } from '../libs/users/src/user.repository';
 import * as msalNode from '@azure/msal-node';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-const ADMIN_GROUP_ID = 'admin-azure-group-id';
 const JWT_SECRET = 'test-secret-that-is-long-enough-32';
 const AZURE_OID = 'oid-user-001';
 const USER_EMAIL = 'player@foosball.test';
@@ -50,7 +54,6 @@ const TEST_CONFIG: Record<string, string | number> = {
   AZURE_CLIENT_ID: 'test-client-id',
   AZURE_CLIENT_SECRET: 'test-client-secret',
   AZURE_REDIRECT_URI: 'http://localhost/connect',
-  ADMIN_AZURE_GROUP_ID: ADMIN_GROUP_ID,
   JWT_SECRET,
   DB_HOST: 'localhost',
   DB_PORT: 3306,
@@ -59,25 +62,19 @@ const TEST_CONFIG: Record<string, string | number> = {
   DB_NAME: 'test',
 };
 
-// ── Mock fetch (used by AzureAdService.getGroupsFromGraph) ────────────────────
-const mockFetch = jest.fn();
-global.fetch = mockFetch;
-
 // ── MSAL mock client ──────────────────────────────────────────────────────────
 const mockMsalClient = {
   getAuthCodeUrl: jest.fn().mockResolvedValue('https://login.microsoftonline.com/authorize'),
   acquireTokenByCode: jest.fn(),
 };
 
-function buildMsalResult(groups?: string[], claimNames?: Record<string, string>) {
+function buildMsalResult() {
   return {
     accessToken: 'mock-graph-access-token',
     idTokenClaims: {
       oid: AZURE_OID,
       preferred_username: USER_EMAIL,
       name: DISPLAY_NAME,
-      ...(groups !== undefined ? { groups } : {}),
-      ...(claimNames ? { _claim_names: claimNames } : {}),
     },
   };
 }
@@ -205,9 +202,7 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
     (msalNode.ConfidentialClientApplication as jest.Mock).mockImplementation(
       () => mockMsalClient,
     );
-    mockMsalClient.acquireTokenByCode.mockResolvedValue(
-      buildMsalResult([ADMIN_GROUP_ID]),
-    );
+    mockMsalClient.acquireTokenByCode.mockResolvedValue(buildMsalResult());
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [
@@ -244,12 +239,11 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
       .useValue({
         findByAzureOid: jest.fn((oid: string) => Promise.resolve(users.get(oid) ?? null)),
         findById: jest.fn((id: number) => Promise.resolve(userById.get(id) ?? null)),
-        upsert: jest.fn(async (data: { azureOid: string; email: string; displayName: string; isAdmin: boolean }) => {
+        upsert: jest.fn(async (data: { azureOid: string; email: string; displayName: string }) => {
           const existing = users.get(data.azureOid);
           if (existing) {
             existing.email = data.email;
             existing.displayName = data.displayName;
-            existing.isAdmin = data.isAdmin;
             existing.updatedAt = new Date();
             return existing;
           }
@@ -258,7 +252,7 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
           u.azureOid = data.azureOid;
           u.email = data.email;
           u.displayName = data.displayName;
-          u.isAdmin = data.isAdmin;
+          u.isAdmin = false;   // DB default
           u.createdAt = new Date();
           u.updatedAt = new Date();
           users.set(u.azureOid, u);
@@ -282,21 +276,16 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
 
   beforeEach(() => {
     resetStores();
-    mockFetch.mockReset();
-    mockMsalClient.acquireTokenByCode.mockResolvedValue(buildMsalResult([ADMIN_GROUP_ID]));
+    mockMsalClient.acquireTokenByCode.mockResolvedValue(buildMsalResult());
   });
 
   afterAll(async () => {
     await app.close();
   });
 
-  // ── 6a. Successful login — groups claim present, user is admin ──────────────
-  describe('6a — successful login with admin group in token', () => {
-    it('returns 200 with accessToken, refreshToken, expiresIn:900 and is_admin:true in JWT', async () => {
-      mockMsalClient.acquireTokenByCode.mockResolvedValue(
-        buildMsalResult([ADMIN_GROUP_ID, 'other-group']),
-      );
-
+  // ── 6a. New user login — is_admin defaults to false ─────────────────────────
+  describe('6a — new user login: is_admin defaults to false (DB default)', () => {
+    it('returns 200 with accessToken, refreshToken, expiresIn:900 and is_admin:false in JWT', async () => {
       const res = await request(app.getHttpServer()).get(
         '/connect?code=auth-code&state=state',
       );
@@ -307,14 +296,14 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
       expect(res.body.expiresIn).toBe(900);
 
       const payload = jwtService.decode(res.body.accessToken) as Record<string, unknown>;
-      expect(payload.is_admin).toBe(true);
+      expect(payload.is_admin).toBe(false);
       expect(payload.email).toBe(USER_EMAIL);
       expect(payload.sub).toBeDefined();
 
-      // users table has is_admin=true
+      // users table has is_admin=false (DB default)
       const savedUser = users.get(AZURE_OID);
       expect(savedUser).toBeDefined();
-      expect(savedUser!.isAdmin).toBe(true);
+      expect(savedUser!.isAdmin).toBe(false);
 
       // refresh_tokens row exists and used_at is null
       const tokenRows = Array.from(tokens.values());
@@ -324,10 +313,11 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
     });
   });
 
-  // ── 6b. Regular user (not in admin group) ──────────────────────────────────
-  describe('6b — regular user not in admin group', () => {
-    it('returns 200 with is_admin:false in JWT and users.is_admin=false', async () => {
-      mockMsalClient.acquireTokenByCode.mockResolvedValue(buildMsalResult(['other-group']));
+  // ── 6b. Existing user with is_admin=true in DB — value preserved ────────────
+  describe('6b — existing admin user: is_admin preserved from DB row', () => {
+    it('returns 200 with is_admin:true in JWT and users.is_admin=true (DB value preserved)', async () => {
+      // Pre-seed user with is_admin=true (set directly in DB)
+      await seedUser({ isAdmin: true });
 
       const res = await request(app.getHttpServer()).get(
         '/connect?code=auth-code&state=state',
@@ -335,10 +325,10 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
 
       expect(res.status).toBe(HttpStatus.OK);
       const payload = jwtService.decode(res.body.accessToken) as Record<string, unknown>;
-      expect(payload.is_admin).toBe(false);
+      expect(payload.is_admin).toBe(true);
 
       const savedUser = users.get(AZURE_OID);
-      expect(savedUser!.isAdmin).toBe(false);
+      expect(savedUser!.isAdmin).toBe(true);
     });
   });
 
@@ -368,7 +358,7 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
   // ── 6d. Token refresh — single-use rotation ─────────────────────────────────
   describe('6d — POST /auth/refresh single-use rotation', () => {
     it('issues T2 from T1 and rejects T1 on second use', async () => {
-      mockMsalClient.acquireTokenByCode.mockResolvedValue(buildMsalResult([ADMIN_GROUP_ID]));
+      mockMsalClient.acquireTokenByCode.mockResolvedValue(buildMsalResult());
 
       const callbackRes = await request(app.getHttpServer()).get(
         '/connect?code=auth-code&state=state',
@@ -425,55 +415,10 @@ describe('Scenario 6 — Azure SSO login (e2e)', () => {
     });
   });
 
-  // ── 6f. Graph API fallback when groups claim absent (cap exceeded) ───────────
-  describe('6f — Graph API fallback when groups claim exceeds cap', () => {
-    it('uses Graph API groups and assigns is_admin:true when admin group returned', async () => {
-      mockMsalClient.acquireTokenByCode.mockResolvedValue(
-        buildMsalResult(undefined, { groups: 'src1' }),
-      );
-      mockFetch.mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ value: [{ id: ADMIN_GROUP_ID }, { id: 'other-id' }] }),
-      });
-
-      const res = await request(app.getHttpServer()).get(
-        '/connect?code=auth-code&state=state',
-      );
-
-      expect(res.status).toBe(HttpStatus.OK);
-      const payload = jwtService.decode(res.body.accessToken) as Record<string, unknown>;
-      expect(payload.is_admin).toBe(true);
-
-      const savedUser = users.get(AZURE_OID);
-      expect(savedUser!.isAdmin).toBe(true);
-    });
-  });
-
-  // ── 6g. Graph API unavailable ────────────────────────────────────────────────
-  describe('6g — Graph API unavailable returns 503 AZURE_GRAPH_UNAVAILABLE', () => {
-    it('returns 503 when both Graph API attempts fail', async () => {
-      mockMsalClient.acquireTokenByCode.mockResolvedValue(
-        buildMsalResult(undefined, { groups: 'src1' }),
-      );
-      mockFetch
-        .mockResolvedValueOnce({ ok: false, status: 503 })
-        .mockResolvedValueOnce({ ok: false, status: 503 });
-
-      const res = await request(app.getHttpServer()).get(
-        '/connect?code=auth-code&state=state',
-      );
-
-      expect(res.status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
-      // ServiceUnavailableException body may have the code at different levels
-      const bodyStr = JSON.stringify(res.body);
-      expect(bodyStr).toMatch(/AZURE_GRAPH_UNAVAILABLE/);
-    });
-  });
-
   // ── 6h. Logout invalidates refresh token ────────────────────────────────────
   describe('6h — POST /auth/logout invalidates refresh token', () => {
     it('204 on logout, then 401 when refresh token is reused', async () => {
-      mockMsalClient.acquireTokenByCode.mockResolvedValue(buildMsalResult([ADMIN_GROUP_ID]));
+      mockMsalClient.acquireTokenByCode.mockResolvedValue(buildMsalResult());
 
       const callbackRes = await request(app.getHttpServer()).get(
         '/connect?code=auth-code&state=state',

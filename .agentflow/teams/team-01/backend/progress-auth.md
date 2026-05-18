@@ -199,6 +199,34 @@ npm run test:e2e      → 8 suites, 42 tests PASS
 
 ---
 
+## Feature: admin-db-managed — 2026-05-18
+
+**Spec**: `.agentflow/architect/specs/feature-admin-db-managed.md`
+**Decision**: `.agentflow/decisions/decision-2026-05-18-1308-admin-db-managed.md`
+
+### Summary
+`is_admin` fully decoupled from Azure AD. Azure login now used only for identity (oid, email, displayName). All Azure-groups / Microsoft Graph fallback code removed.
+
+### Files changed
+- `libs/auth/src/azure-ad.service.ts` — deleted `getGroupsFromGraph()`, removed `Logger` and `ServiceUnavailableException` imports
+- `libs/auth/src/auth.service.ts` — removed `adminGroupId` field, `ConfigService` injection, entire admin-detection block from `handleCallback()`; upsert call no longer passes `isAdmin`
+- `libs/users/src/user.service.ts` — removed `isAdmin` from `UpsertUserInput` interface
+- `libs/users/src/user.repository.ts` — removed `isAdmin` from `upsert()` signature, existing-user branch no longer assigns `isAdmin`, new-user branch does not set `isAdmin` (DB default applies)
+- `libs/auth/src/azure-ad.service.spec.ts` — removed all `getGroupsFromGraph` tests and `mockFetch`; kept `getAuthCodeUrl` / `exchangeCode` tests
+- `libs/auth/src/auth.service.spec.ts` — removed `ConfigService` mock, Graph fallback tests, `isAdmin` assertion; added "no isAdmin passed" assertions
+- `libs/auth/src/msal.strategy.spec.ts` — rewrote Graph/admin-group section to reflect DB-managed admin (5 new tests covering: no isAdmin passed, JWT reflects DB row, DB default on new user, existing admin preserved, groups claim ignored)
+- `libs/users/src/user.service.spec.ts` — removed `isAdmin` from all `upsertFromAzure` calls; updated test descriptions
+- `libs/users/src/user.repository.spec.ts` — removed `isAdmin` from all `upsert()` calls; updated update-path tests to assert `isAdmin` is preserved from DB row, not overwritten; added "create call does NOT include isAdmin" assertion
+- `test/auth-sso.e2e-spec.ts` — removed `ADMIN_GROUP_ID`, `ADMIN_AZURE_GROUP_ID` from TEST_CONFIG, `mockFetch`, `buildMsalResult` groups params; rewrote 6a (new user → is_admin=false); rewrote 6b (seedUser with isAdmin=true → preserved); deleted 6f/6g; updated 6d/6h to call `buildMsalResult()` without args
+
+### Build & Test Results
+- `npm run build:auth` — SUCCESS (0 errors)
+- `npx jest apps/auth libs/auth libs/users` — 120 tests, 13 suites, ALL PASS
+- `npm run test:e2e` — 40 tests, 8 suites, ALL PASS
+- `npm run test:cov` — libs/auth: 98.12% statements, libs/users: 100% (both >= 80%)
+
+---
+
 ## Coverage Round 3 — 2026-05-18 (QA gap: apps/auth unit coverage 0% → 100%)
 
 **Goal**: bring overall "All files" statement coverage from 78.59% to >= 80% by adding unit tests for apps/auth controllers and exception filter.

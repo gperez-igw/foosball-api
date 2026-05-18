@@ -1,10 +1,9 @@
-import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as msal from '@azure/msal-node';
 
 @Injectable()
 export class AzureAdService {
-  private readonly logger = new Logger(AzureAdService.name);
   private readonly confidentialClient: msal.ConfidentialClientApplication;
   private readonly redirectUri: string;
 
@@ -42,46 +41,5 @@ export class AzureAdService {
     }
 
     return result;
-  }
-
-  async getGroupsFromGraph(accessToken: string): Promise<string[]> {
-    const maxRetries = 2;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        const response = await fetch('https://graph.microsoft.com/v1.0/me/memberOf?$select=id', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-
-        if (!response.ok) {
-          if (attempt < maxRetries) {
-            this.logger.warn(`Graph API attempt ${attempt} failed with status ${response.status}, retrying...`);
-            continue;
-          }
-          throw new ServiceUnavailableException({
-            code: 'AZURE_GRAPH_UNAVAILABLE',
-            message: 'Could not resolve group membership via Microsoft Graph',
-          });
-        }
-
-        const data = await response.json() as { value: Array<{ id: string }> };
-        return data.value.map((g) => g.id);
-      } catch (err) {
-        if (err instanceof ServiceUnavailableException) throw err;
-        if (attempt < maxRetries) {
-          this.logger.warn(`Graph API attempt ${attempt} threw error, retrying...`);
-          continue;
-        }
-        throw new ServiceUnavailableException({
-          code: 'AZURE_GRAPH_UNAVAILABLE',
-          message: 'Could not resolve group membership via Microsoft Graph',
-        });
-      }
-    }
-
-    throw new ServiceUnavailableException({
-      code: 'AZURE_GRAPH_UNAVAILABLE',
-      message: 'Could not resolve group membership via Microsoft Graph',
-    });
   }
 }

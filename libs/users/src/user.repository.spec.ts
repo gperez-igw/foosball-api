@@ -110,7 +110,7 @@ describe('UserRepository', () => {
   // ── upsert — create path ────────────────────────────────────────────────────
 
   describe('upsert — create (new user)', () => {
-    it('creates and saves a new user when azureOid not found', async () => {
+    it('creates and saves a new user without isAdmin — DB default applies', async () => {
       typeOrmRepo.findOne.mockResolvedValue(null); // findByAzureOid → null
       const newUser = makeUser();
       typeOrmRepo.create.mockReturnValue(newUser);
@@ -120,14 +120,12 @@ describe('UserRepository', () => {
         azureOid: 'oid-001',
         email: 'mario@foosball.test',
         displayName: 'Mario Rossi',
-        isAdmin: false,
       });
 
       expect(typeOrmRepo.create).toHaveBeenCalledWith({
         azureOid: 'oid-001',
         email: 'mario@foosball.test',
         displayName: 'Mario Rossi',
-        isAdmin: false,
       });
       expect(typeOrmRepo.save).toHaveBeenCalledWith(newUser);
       expect(result).toBe(newUser);
@@ -142,21 +140,36 @@ describe('UserRepository', () => {
         azureOid: 'oid-001',
         email: 'updated@foosball.test',
         displayName: 'Mario Updated',
-        isAdmin: true,
       });
 
       expect(typeOrmRepo.create).not.toHaveBeenCalled();
+    });
+
+    it('create call does NOT include isAdmin property', async () => {
+      typeOrmRepo.findOne.mockResolvedValue(null);
+      const newUser = makeUser();
+      typeOrmRepo.create.mockReturnValue(newUser);
+      typeOrmRepo.save.mockResolvedValue(newUser);
+
+      await repo.upsert({
+        azureOid: 'oid-001',
+        email: 'mario@foosball.test',
+        displayName: 'Mario Rossi',
+      });
+
+      const createArg = typeOrmRepo.create.mock.calls[0][0];
+      expect(createArg).not.toHaveProperty('isAdmin');
     });
   });
 
   // ── upsert — update path ────────────────────────────────────────────────────
 
   describe('upsert — update (existing user)', () => {
-    it('updates email, displayName, isAdmin on existing user and saves', async () => {
+    it('updates email and displayName on existing user without touching isAdmin', async () => {
       const existing = makeUser({
         email: 'old@foosball.test',
         displayName: 'Old Name',
-        isAdmin: false,
+        isAdmin: true,   // pre-existing admin status — must NOT be overwritten
       });
       typeOrmRepo.findOne.mockResolvedValue(existing);
       typeOrmRepo.save.mockImplementation(async (u) => u);
@@ -165,19 +178,28 @@ describe('UserRepository', () => {
         azureOid: 'oid-001',
         email: 'new@foosball.test',
         displayName: 'New Name',
-        isAdmin: true,
       });
 
       expect(result.email).toBe('new@foosball.test');
       expect(result.displayName).toBe('New Name');
+      // isAdmin must be preserved as-is from DB
       expect(result.isAdmin).toBe(true);
-      expect(typeOrmRepo.save).toHaveBeenCalledWith(
-        expect.objectContaining({
-          email: 'new@foosball.test',
-          displayName: 'New Name',
-          isAdmin: true,
-        }),
-      );
+    });
+
+    it('save call does NOT include an explicit isAdmin field from the input', async () => {
+      const existing = makeUser({ isAdmin: false });
+      typeOrmRepo.findOne.mockResolvedValue(existing);
+      typeOrmRepo.save.mockImplementation(async (u) => u);
+
+      await repo.upsert({
+        azureOid: 'oid-001',
+        email: 'new@foosball.test',
+        displayName: 'New Name',
+      });
+
+      const saveArg = typeOrmRepo.save.mock.calls[0][0];
+      // The entity's isAdmin property comes from the DB row, not the input
+      expect(saveArg.isAdmin).toBe(false);
     });
 
     it('returns the saved entity from typeOrmRepo.save', async () => {
@@ -190,7 +212,6 @@ describe('UserRepository', () => {
         azureOid: 'oid-001',
         email: existing.email,
         displayName: 'Saved Name',
-        isAdmin: false,
       });
 
       expect(result).toBe(savedUser);

@@ -8,21 +8,22 @@
  * Design note: this project does not implement a Passport MsalStrategy class.
  * The MSAL token exchange and claims extraction logic lives entirely in
  * AzureAdService.exchangeCode() and AuthService.handleCallback().
- * This file therefore tests that layer (claims extraction + role derivation),
- * satisfying the spec naming requirement.  The deviation is noted in
+ * This file therefore tests that layer (claims extraction + identity),
+ * satisfying the spec naming requirement. The deviation is noted in
  * .agentflow/teams/team-01/backend/progress-auth.md.
+ *
+ * Since admin status is now DB-managed (feature-admin-db-managed), the
+ * handleCallback path no longer reads any groups claim or calls Graph API.
+ * Tests reflect the simplified flow: identity claims only (oid, email, name).
  */
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { ServiceUnavailableException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { AzureAdService } from './azure-ad.service';
 import { AuthService } from './auth.service';
 import { TokenService } from './token.service';
 import { RefreshTokenService } from './refresh-token.service';
 import { UserService } from '@app/users/user.service';
 import { UserEntity } from '@app/users/user.entity';
-import { RefreshTokenEntity } from './refresh-token.entity';
 
 // ── Mock MSAL module ──────────────────────────────────────────────────────────
 jest.mock('@azure/msal-node', () => ({
@@ -33,7 +34,6 @@ jest.mock('@azure/msal-node', () => ({
 }));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const ADMIN_GROUP = 'admin-group-id';
 
 function makeUser(overrides: Partial<UserEntity> = {}): UserEntity {
   const u = new UserEntity();
@@ -52,7 +52,7 @@ function makeTokenPair() {
 }
 
 /**
- * Build a mock MSAL AuthenticationResult with configurable claims.
+ * Build a mock MSAL AuthenticationResult with identity claims only.
  */
 function msalResult(claims: Record<string, unknown> = {}) {
   return {
@@ -73,7 +73,6 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
   let azureAdService: jest.Mocked<AzureAdService>;
   let userService: jest.Mocked<UserService>;
   let tokenService: jest.Mocked<TokenService>;
-  let refreshTokenService: jest.Mocked<RefreshTokenService>;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -84,7 +83,6 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
           useValue: {
             getAuthCodeUrl: jest.fn(),
             exchangeCode: jest.fn(),
-            getGroupsFromGraph: jest.fn(),
           },
         },
         {
@@ -106,10 +104,6 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
             findById: jest.fn(),
           },
         },
-        {
-          provide: ConfigService,
-          useValue: { getOrThrow: jest.fn().mockReturnValue(ADMIN_GROUP) },
-        },
       ],
     }).compile();
 
@@ -117,7 +111,6 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
     azureAdService = module.get(AzureAdService);
     userService = module.get(UserService);
     tokenService = module.get(TokenService);
-    refreshTokenService = module.get(RefreshTokenService);
   });
 
   // ── Token validation ────────────────────────────────────────────────────────
@@ -135,8 +128,8 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
     });
 
     it('calls MSAL exchangeCode with the supplied code and state', async () => {
-      azureAdService.exchangeCode.mockResolvedValue(msalResult({ groups: [ADMIN_GROUP] }) as any);
-      userService.upsertFromAzure.mockResolvedValue(makeUser({ isAdmin: true }));
+      azureAdService.exchangeCode.mockResolvedValue(msalResult() as any);
+      userService.upsertFromAzure.mockResolvedValue(makeUser());
       tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
 
       await authService.handleCallback('my-code', 'my-state');
@@ -150,7 +143,7 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
   describe('claims extraction — oid, email, displayName', () => {
     it('extracts azure_oid from the oid claim', async () => {
       azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ oid: 'unique-oid-xyz', groups: [] }) as any,
+        msalResult({ oid: 'unique-oid-xyz' }) as any,
       );
       userService.upsertFromAzure.mockResolvedValue(makeUser());
       tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
@@ -164,7 +157,7 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
 
     it('uses preferred_username as email when present', async () => {
       azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ preferred_username: 'mario@company.it', groups: [] }) as any,
+        msalResult({ preferred_username: 'mario@company.it' }) as any,
       );
       userService.upsertFromAzure.mockResolvedValue(makeUser());
       tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
@@ -181,9 +174,7 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
         oid: 'oid-1',
         email: 'fallback@company.it',
         name: 'Fallback User',
-        groups: [],
       };
-      // no preferred_username key
       azureAdService.exchangeCode.mockResolvedValue({ accessToken: 'tok', idTokenClaims: claims } as any);
       userService.upsertFromAzure.mockResolvedValue(makeUser());
       tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
@@ -197,7 +188,7 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
 
     it('extracts displayName from the name claim', async () => {
       azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ name: 'Displayed Name', groups: [] }) as any,
+        msalResult({ name: 'Displayed Name' }) as any,
       );
       userService.upsertFromAzure.mockResolvedValue(makeUser());
       tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
@@ -210,135 +201,79 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
     });
   });
 
-  // ── Admin role assignment from groups claim ─────────────────────────────────
+  // ── DB-managed admin — no groups claim processing ───────────────────────────
 
-  describe('role assignment from groups claim', () => {
-    it('assigns is_admin=true when groups array contains the admin group ID', async () => {
-      azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ groups: [ADMIN_GROUP, 'other-group'] }) as any,
-      );
+  describe('DB-managed admin — is_admin not derived from Azure claims', () => {
+    it('does NOT pass isAdmin to upsertFromAzure', async () => {
+      azureAdService.exchangeCode.mockResolvedValue(msalResult() as any);
+      userService.upsertFromAzure.mockResolvedValue(makeUser());
+      tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
+
+      await authService.handleCallback('code', 'state');
+
+      const callArg = userService.upsertFromAzure.mock.calls[0][0];
+      expect(callArg).not.toHaveProperty('isAdmin');
+    });
+
+    it('JWT reflects is_admin from DB row (user returned by upsert), not from token claims', async () => {
+      azureAdService.exchangeCode.mockResolvedValue(msalResult() as any);
       const adminUser = makeUser({ isAdmin: true });
       userService.upsertFromAzure.mockResolvedValue(adminUser);
       tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
 
       await authService.handleCallback('code', 'state');
 
-      expect(userService.upsertFromAzure).toHaveBeenCalledWith(
-        expect.objectContaining({ isAdmin: true }),
-      );
+      expect(tokenService.issueTokenPair).toHaveBeenCalledWith(adminUser);
     });
 
-    it('assigns is_admin=false when groups array does not contain the admin group ID', async () => {
+    it('new user login: upsert is called without groups — DB sets default false', async () => {
+      azureAdService.exchangeCode.mockResolvedValue(msalResult() as any);
+      const newUser = makeUser({ isAdmin: false });
+      userService.upsertFromAzure.mockResolvedValue(newUser);
+      tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
+
+      await authService.handleCallback('code', 'state');
+
+      expect(userService.upsertFromAzure).toHaveBeenCalledWith({
+        azureOid: 'azure-oid-001',
+        email: 'test@foosball.test',
+        displayName: 'Test User',
+      });
+    });
+
+    it('existing admin user: upsert preserves is_admin (returned by repo), token reflects true', async () => {
+      azureAdService.exchangeCode.mockResolvedValue(msalResult() as any);
+      const existingAdmin = makeUser({ isAdmin: true });
+      userService.upsertFromAzure.mockResolvedValue(existingAdmin);
+      tokenService.issueTokenPair.mockResolvedValue({
+        accessToken: 'admin-jwt',
+        refreshToken: 'refresh',
+        expiresIn: 900,
+      });
+
+      const result = await authService.handleCallback('code', 'state');
+
+      expect(tokenService.issueTokenPair).toHaveBeenCalledWith(existingAdmin);
+      expect(result.accessToken).toBe('admin-jwt');
+    });
+
+    it('groups claim in token is ignored — no effect on upsert call', async () => {
+      // Even if the token has groups, they must be completely ignored
       azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ groups: ['other-group', 'yet-another-group'] }) as any,
+        msalResult({ groups: ['admin-group-id', 'other-group'] }) as any,
       );
       userService.upsertFromAzure.mockResolvedValue(makeUser({ isAdmin: false }));
       tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
 
       await authService.handleCallback('code', 'state');
 
-      expect(userService.upsertFromAzure).toHaveBeenCalledWith(
-        expect.objectContaining({ isAdmin: false }),
-      );
-    });
-
-    it('assigns is_admin=false when groups array is empty', async () => {
-      azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ groups: [] }) as any,
-      );
-      userService.upsertFromAzure.mockResolvedValue(makeUser({ isAdmin: false }));
-      tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
-
-      await authService.handleCallback('code', 'state');
-
-      expect(userService.upsertFromAzure).toHaveBeenCalledWith(
-        expect.objectContaining({ isAdmin: false }),
-      );
-    });
-  });
-
-  // ── Missing groups claim (cap exceeded) ─────────────────────────────────────
-
-  describe('missing groups claim — Graph API fallback', () => {
-    it('calls getGroupsFromGraph when _claim_names.groups is present', async () => {
-      azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ _claim_names: { groups: 'src1' } }) as any,
-      );
-      azureAdService.getGroupsFromGraph.mockResolvedValue([ADMIN_GROUP]);
-      userService.upsertFromAzure.mockResolvedValue(makeUser({ isAdmin: true }));
-      tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
-
-      await authService.handleCallback('code', 'state');
-
-      expect(azureAdService.getGroupsFromGraph).toHaveBeenCalled();
-      expect(userService.upsertFromAzure).toHaveBeenCalledWith(
-        expect.objectContaining({ isAdmin: true }),
-      );
-    });
-
-    it('assigns is_admin=false when Graph returns groups that do not include admin group', async () => {
-      azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ _claim_names: { groups: 'src1' } }) as any,
-      );
-      azureAdService.getGroupsFromGraph.mockResolvedValue(['non-admin-group']);
-      userService.upsertFromAzure.mockResolvedValue(makeUser({ isAdmin: false }));
-      tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
-
-      await authService.handleCallback('code', 'state');
-
-      expect(userService.upsertFromAzure).toHaveBeenCalledWith(
-        expect.objectContaining({ isAdmin: false }),
-      );
-    });
-
-    it('does NOT call getGroupsFromGraph when groups claim is present', async () => {
-      azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ groups: ['some-group'] }) as any,
-      );
-      userService.upsertFromAzure.mockResolvedValue(makeUser());
-      tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
-
-      await authService.handleCallback('code', 'state');
-
-      expect(azureAdService.getGroupsFromGraph).not.toHaveBeenCalled();
-    });
-
-    it('does NOT call getGroupsFromGraph when neither groups nor _claim_names is present', async () => {
-      // No groups at all — user simply has no group membership
-      const claims = {
-        oid: 'oid-1',
-        preferred_username: 'user@co.it',
-        name: 'User',
-      };
-      azureAdService.exchangeCode.mockResolvedValue({
-        accessToken: 'tok',
-        idTokenClaims: claims,
-      } as any);
-      userService.upsertFromAzure.mockResolvedValue(makeUser({ isAdmin: false }));
-      tokenService.issueTokenPair.mockResolvedValue(makeTokenPair());
-
-      await authService.handleCallback('code', 'state');
-
-      expect(azureAdService.getGroupsFromGraph).not.toHaveBeenCalled();
-      expect(userService.upsertFromAzure).toHaveBeenCalledWith(
-        expect.objectContaining({ isAdmin: false }),
-      );
-    });
-
-    it('propagates ServiceUnavailableException when Graph API is unavailable', async () => {
-      azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ _claim_names: { groups: 'src1' } }) as any,
-      );
-      azureAdService.getGroupsFromGraph.mockRejectedValue(
-        new ServiceUnavailableException({
-          code: 'AZURE_GRAPH_UNAVAILABLE',
-          message: 'Graph unavailable',
-        }),
-      );
-
-      await expect(authService.handleCallback('code', 'state')).rejects.toThrow(
-        ServiceUnavailableException,
-      );
+      const callArg = userService.upsertFromAzure.mock.calls[0][0];
+      expect(callArg).not.toHaveProperty('isAdmin');
+      expect(callArg).toEqual({
+        azureOid: 'azure-oid-001',
+        email: 'test@foosball.test',
+        displayName: 'Test User',
+      });
     });
   });
 
@@ -346,10 +281,8 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
 
   describe('token pair issuing', () => {
     it('returns a token pair with expiresIn=900', async () => {
-      azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ groups: [ADMIN_GROUP] }) as any,
-      );
-      userService.upsertFromAzure.mockResolvedValue(makeUser({ isAdmin: true }));
+      azureAdService.exchangeCode.mockResolvedValue(msalResult() as any);
+      userService.upsertFromAzure.mockResolvedValue(makeUser());
       tokenService.issueTokenPair.mockResolvedValue({
         accessToken: 'access-jwt',
         refreshToken: 'refresh-raw',
@@ -365,9 +298,7 @@ describe('MSAL token validation and claims extraction (via AzureAdService + Auth
 
     it('calls userService.upsertFromAzure before issuing tokens', async () => {
       const callOrder: string[] = [];
-      azureAdService.exchangeCode.mockResolvedValue(
-        msalResult({ groups: [] }) as any,
-      );
+      azureAdService.exchangeCode.mockResolvedValue(msalResult() as any);
       userService.upsertFromAzure.mockImplementation(async () => {
         callOrder.push('upsert');
         return makeUser();

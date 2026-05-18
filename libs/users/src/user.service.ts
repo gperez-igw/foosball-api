@@ -6,7 +6,6 @@ export interface UpsertUserInput {
   azureOid: string;
   email: string;
   displayName: string;
-  isAdmin: boolean;
 }
 
 @Injectable()

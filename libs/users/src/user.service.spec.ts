@@ -40,7 +40,7 @@ describe('UserService', () => {
   });
 
   describe('upsertFromAzure', () => {
-    it('should create a new user on first login', async () => {
+    it('should create a new user on first login — identity only, is_admin defaults to DB false', async () => {
       const user = mockUser();
       repository.upsert.mockResolvedValue(user);
 
@@ -48,19 +48,17 @@ describe('UserService', () => {
         azureOid: 'azure-oid-123',
         email: 'mario.rossi@company.com',
         displayName: 'Mario Rossi',
-        isAdmin: false,
       });
 
       expect(repository.upsert).toHaveBeenCalledWith({
         azureOid: 'azure-oid-123',
         email: 'mario.rossi@company.com',
         displayName: 'Mario Rossi',
-        isAdmin: false,
       });
       expect(result).toBe(user);
     });
 
-    it('should sync is_admin=true when user is in admin group', async () => {
+    it('should reflect is_admin from DB row (not from input) — existing admin preserved', async () => {
       const user = mockUser();
       user.isAdmin = true;
       repository.upsert.mockResolvedValue(user);
@@ -69,7 +67,6 @@ describe('UserService', () => {
         azureOid: 'azure-oid-123',
         email: 'mario.rossi@company.com',
         displayName: 'Mario Rossi',
-        isAdmin: true,
       });
 
       expect(result.isAdmin).toBe(true);
@@ -84,7 +81,6 @@ describe('UserService', () => {
         azureOid: 'azure-oid-123',
         email: 'mario.rossi@company.com',
         displayName: 'Mario Updated',
-        isAdmin: false,
       });
 
       expect(result.displayName).toBe('Mario Updated');
