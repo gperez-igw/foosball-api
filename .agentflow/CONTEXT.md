@@ -2,19 +2,19 @@
 project: foosball-api
 phase: sprint-end
 status: completed
-mode: sprint
+mode: interactive
 current_sprint: 1
 briefing: briefings/foosball-api.md
 autonomy: supervised
-updated: 2026-05-18 10:05
+updated: 2026-05-18 10:10
 ---
 
 ## Current State
-Phase: Sprint-01 — sprint close. Tutti i gate completati: implementazione + code
-review (Approved) + QA (PASS, 320 unit + 42 e2e, coverage 92.48%) + Architect
-milestone review (proceed) + documentazione. Artefatti di chiusura scritti
-(retrospective, summary, CHANGELOG). In attesa di conferma utente per commit PM
-files + apertura PR.
+Phase: Sprint-01 CHIUSO. Tutti i gate completati: implementazione + code review
+(Approved) + QA (PASS, 320 unit + 42 e2e, coverage 92.48%) + Architect milestone
+review (proceed) + documentazione + artefatti di chiusura. Lavoro committato in
+locale su `master` (HEAD 40f55a6). Pubblicazione remota differita su richiesta
+utente (decision-2026-05-18-1010-no-push-sprint01.md): nessun push, nessuna PR.
 Sprint: 1 — MVP foosball-api COMPLETO.
 
 ## Completed
@@ -37,10 +37,10 @@ Sprint: 1 — MVP foosball-api COMPLETO.
 - Stack/ownership/regole di business: vedi decisioni 2026-05-15 in decisions/.
 
 ## Next Steps
-- Conferma utente → commit dei file rimanenti (fix round, coverage test, PM files).
-- Apertura PR verso master/main (da concordare: branch dedicato vs commit diretto —
-  tutto lo sprint è stato su `master`).
-- Dopo merge: tornare in modalità interattiva o pianificare sprint-02.
+- Sprint-01 concluso. Lavoro committato solo in locale.
+- Quando l'utente vorrà pubblicare: branch + PR, oppure push diretto di `master`.
+- Modalità interattiva attiva: l'utente può chiedere nuove modifiche o pianificare
+  sprint-02 (backlog vuoto — eventuali feature: tornei, notifiche, frontend).
 
 ## Blockers
 - Nessuno.
