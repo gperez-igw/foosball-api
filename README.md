@@ -1,21 +1,23 @@
 # foosball-api
 
-REST API for recording and tracking company foosball (table football) match results during lunch breaks. Built on NestJS 11 + Fastify in a monorepo structure, with Azure AD SSO, BullMQ async jobs, MySQL persistence, and Redis caching.
+REST API for recording and tracking company foosball (table football) match results. Built on NestJS 11 + Fastify as a monorepo of four independent processes, with Azure AD SSO, quorum-based result confirmation, time-filtered leaderboards, BullMQ async jobs, MySQL 8 persistence, and Redis 7 caching.
 
 ---
 
 ## What is this
 
-foosball-api is an internal company API that lets employees register foosball match results, confirm them via a quorum mechanism (majority of players must accept), and browse win-based leaderboards filtered by time period. Match results become immutable once confirmed by all required players. Administrators can override confirmed results, with all changes tracked in an append-only audit log.
+foosball-api is an internal company API that lets employees register foosball match results, confirm them via a quorum mechanism (a majority of players must accept), and browse win-based leaderboards filtered by time period. Match results become immutable once the confirmation quorum is reached. Administrators can override confirmed results; every override is recorded in an append-only audit log. An Azure AD group controls which users receive admin privileges.
 
 ---
 
 ## Prerequisites
 
-- Node.js 20 or later (LTS recommended)
-- npm 10 or later
-- Docker and Docker Compose (for local MySQL + Redis)
-- An Azure App Registration with redirect URI and group claims configured (see Azure AD Configuration below)
+| Requirement | Version |
+|---|---|
+| Node.js | 20 LTS or later |
+| npm | 10 or later |
+| Docker + Docker Compose | any recent version |
+| Azure App Registration | with redirect URI and groups claim configured (see Azure AD Configuration) |
 
 ---
 
@@ -33,44 +35,58 @@ npm install
 
 ```bash
 cp .env.example .env
-# Edit .env with your values (see Environment Variables below)
+# Edit .env — all required variables are documented in the Environment Variables section
 ```
 
-### 3. Start infrastructure (MySQL + Redis)
+### 3. Start infrastructure (MySQL 8 + Redis 7)
 
 ```bash
 docker compose up -d
 ```
 
+MySQL will be available on port 3306 and Redis on port 6379.
+Wait for both healthchecks to pass before running migrations (`docker compose ps`).
+
 ### 4. Run database migrations
 
+Migrations must be compiled before they can run:
+
 ```bash
+npm run build
 npm run migration:run
 ```
 
-### 5. Start development
+This applies all six migrations in order:
+1. `AddUsersTable`
+2. `AddRefreshTokensTable`
+3. `AddMatchesTable`
+4. `AddMatchPlayersTable`
+5. `AddMatchConfirmationsTable`
+6. `AddAuditLogsTable`
 
-Start the API app (HTTP server):
+### 5. Start the application processes
 
-```bash
-npm run start:dev api
-```
-
-Start the auth app (Azure SSO callback handler):
-
-```bash
-npm run start:dev auth
-```
-
-Start the worker (BullMQ job processor — optional for local dev):
+Each of the four apps is a separate NestJS process. Open a terminal per process:
 
 ```bash
-npm run start:dev worker
+# HTTP REST API — port 3000
+npm run start:api
+
+# Azure SSO handler — port 3001
+npm run start:auth
+
+# BullMQ job consumer (optional in local dev but needed for quorum events)
+npm run start:worker
+
+# BullMQ cron publisher (optional in local dev)
+npm run start:producer
 ```
 
 ### 6. Access Swagger UI
 
-Open `http://localhost:3000/api/docs` in your browser.
+```
+http://localhost:3000/api/docs
+```
 
 ---
 
@@ -78,21 +94,26 @@ Open `http://localhost:3000/api/docs` in your browser.
 
 | Command | Description |
 |---|---|
-| `npm run start:dev api` | Start API app in watch mode |
-| `npm run start:dev auth` | Start auth app in watch mode |
-| `npm run start:dev worker` | Start worker app in watch mode |
-| `npm run start:dev producer` | Start producer app in watch mode |
-| `npm run build api` | Build API app |
-| `npm run build auth` | Build auth app |
-| `npm run build` | Build all apps |
-| `npm run test` | Run all unit tests |
-| `npm run test:cov` | Run tests with coverage report |
-| `npm run test:e2e` | Run end-to-end tests |
-| `npm run lint` | Lint all TypeScript files |
+| `npm run start:api` | Start API app in watch mode (port 3000) |
+| `npm run start:auth` | Start auth app in watch mode (port 3001) |
+| `npm run start:worker` | Start worker app in watch mode (no HTTP) |
+| `npm run start:producer` | Start producer app in watch mode (no HTTP) |
+| `npm run build` | Build all four apps |
+| `npm run build:api` | Build API app only |
+| `npm run build:auth` | Build auth app only |
+| `npm run build:worker` | Build worker app only |
+| `npm run build:producer` | Build producer app only |
+| `npm test` | Run all unit tests (Jest) |
+| `npm run test:cov` | Run unit tests with coverage report |
+| `npm run test:e2e` | Run end-to-end test suite |
+| `npm run test:watch` | Run unit tests in watch mode |
+| `npm run lint` | Lint all TypeScript files with ESLint (auto-fix) |
 | `npm run format` | Format all TypeScript files with Prettier |
-| `npm run migration:generate <name>` | Generate a new TypeORM migration |
-| `npm run migration:run` | Run pending migrations |
-| `npm run migration:revert` | Revert the last migration |
+| `npm run migration:run` | Apply pending TypeORM migrations |
+| `npm run migration:revert` | Revert the last TypeORM migration |
+| `npm run migration:generate <name>` | Generate a new migration from entity changes |
+
+> **Note:** `migration:generate` and `migration:run` operate on the compiled DataSource at `dist/libs/database/src/data-source.js`. Run `npm run build` before using them.
 
 ---
 
@@ -101,46 +122,73 @@ Open `http://localhost:3000/api/docs` in your browser.
 ```
 foosball-api/
 ├── apps/
-│   ├── api/            # HTTP REST server (Fastify, port 3000)
-│   │   └── src/        # Controllers, Fastify setup, Swagger config
-│   ├── auth/           # Azure SSO handler (Fastify, port 3001)
-│   │   └── src/        # MSAL callback, JWT issuance, is_admin sync
-│   ├── worker/         # BullMQ consumer (no HTTP)
-│   │   └── src/        # Job processors, DLQ handler
-│   └── producer/       # BullMQ publisher + cron scheduler
-│       └── src/        # Scheduled jobs, event publishing services
+│   ├── api/                    # HTTP REST server (Fastify, port 3000)
+│   │   └── src/
+│   │       ├── controllers/    # MatchesController, LeaderboardController
+│   │       ├── admin/          # AdminController (admin override, DLQ, audit log)
+│   │       ├── matches/        # Match-scoped sub-controllers (result, confirmations)
+│   │       ├── leaderboard/    # Leaderboard sub-controllers
+│   │       ├── health/         # HealthController (GET /health)
+│   │       ├── filters/        # Global HTTP exception filter
+│   │       └── main.ts         # Fastify bootstrap, Swagger setup, global pipes
+│   ├── auth/                   # Azure SSO handler (Fastify, port 3001)
+│   │   └── src/
+│   │       ├── controllers/    # MSAL redirect/callback controllers
+│   │       ├── auth.controller.ts  # /auth/login, /auth/callback, /auth/me
+│   │       ├── users.controller.ts # /users/me GET + PATCH
+│   │       └── main.ts         # Auth app bootstrap
+│   ├── worker/                 # BullMQ job consumer (no HTTP port)
+│   │   └── src/
+│   │       ├── processors/     # match-confirmed, leaderboard-invalidate, audit-log processors
+│   │       └── main.ts
+│   └── producer/               # BullMQ publisher + cron scheduler (no HTTP port)
+│       └── src/
+│           ├── schedulers/     # leaderboard-cron.service (scheduled cache warm-up)
+│           └── main.ts
 ├── libs/
-│   ├── common/         # Shared DTOs, decorators, guards base, pipes, utils
-│   ├── database/       # TypeORM DataSource config, base repository
-│   ├── events/         # BullMQ typed event contracts (payloads, queue names)
-│   ├── matches/        # Match domain: entities, services, quorum logic, audit log
-│   ├── leaderboard/    # Leaderboard queries, time-filter aggregations, cache layer
-│   ├── auth/           # MSAL strategy, JwtAuthGuard, RolesGuard, Graph API fallback
-│   └── users/          # User entity, UserService, is_admin sync logic
-├── migrations/         # Versioned TypeORM migration files
-├── test/               # End-to-end test specs
-├── docker-compose.yml  # Local dev infrastructure (MySQL 8 + Redis 7)
-├── .env.example        # All required environment variables
-├── nest-cli.json       # NestJS monorepo project definitions
-├── tsconfig.json       # TypeScript root config with path aliases
-└── package.json        # Workspace root
+│   ├── auth/                   # MSAL strategy, JwtAuthGuard, RolesGuard, Graph API fallback
+│   ├── common/                 # Shared DTOs, decorators, guards base, pipes, utilities
+│   ├── database/               # TypeORM DataSource config, base repository
+│   ├── events/                 # BullMQ typed event contracts (EventEnvelope, queue names)
+│   ├── jobs/                   # BullMQ queue injection tokens and shared job utilities
+│   ├── leaderboard/            # Leaderboard queries, time-filter aggregations, Redis cache layer
+│   ├── matches/                # Match entity, services, quorum logic, audit log service
+│   └── users/                  # User entity, UserService, is_admin sync logic
+├── migrations/                 # Versioned TypeORM migration files (001–006)
+├── test/                       # End-to-end test specs (Supertest against in-memory NestJS app)
+│   ├── match-lifecycle.e2e-spec.ts
+│   ├── match-confirmation.e2e-spec.ts
+│   ├── match-lock.e2e-spec.ts
+│   ├── match-confirmation-cancel.e2e-spec.ts
+│   ├── admin-override.e2e-spec.ts
+│   ├── leaderboard.e2e-spec.ts
+│   ├── auth-sso.e2e-spec.ts
+│   └── helpers/                # Test fixtures, JWT helpers, mock factories
+├── docker-compose.yml          # Local infrastructure: MySQL 8 + Redis 7
+├── .env.example                # All required environment variables with defaults
+├── nest-cli.json               # NestJS monorepo project definitions
+├── tsconfig.json               # Root TypeScript config with path aliases
+├── tsconfig.test.json          # Test-specific tsconfig (module: commonjs for Jest)
+└── package.json                # Workspace root — scripts, dependencies
 ```
 
 ---
 
 ## Features
 
-- **Match management** — Create 1v1, 2v2, or 4v4 matches (default 2v2); add players; record the final score
-- **Quorum confirmation** — A match result requires acceptance from a majority of players (floor(n/2) + 1) before becoming permanent
-- **Immutability post-confirmation** — Confirmed results cannot be modified by regular users; attempts return 409
-- **Confirmation reset** — The match creator can cancel the confirmation phase, reset acceptance votes, and re-enter a corrected result
-- **Admin overrides** — Administrators can modify or delete confirmed match results; every override is recorded in an append-only audit log
-- **Leaderboard — users** — Top players by wins, filterable by week, month, year, or all-time
-- **Leaderboard — pairs** — Top player pairs by wins together, with the same time filters
-- **Azure AD SSO** — Login via Microsoft corporate account; no local password management
-- **Role management** — Admin status derived from Azure AD group membership (`ADMIN_AZURE_GROUP_ID`); cached on DB at login
-- **Async events** — Match confirmation, leaderboard cache invalidation, and audit writes are processed asynchronously via BullMQ queues with retry and dead-letter queue
-- **API documentation** — Full Swagger UI at `/api/docs` with request/response schemas and example values
+- **Match management** — Create 1v1, 2v2 (default), or 4v4 matches; add players to teams A and B; record the final score
+- **Quorum confirmation** — A result is locked only after `floor(n/2) + 1` players confirm it; partial confirmations are visible in real time
+- **Immutability post-confirmation** — Confirmed results return 409 on any modification attempt by regular users
+- **Confirmation reset** — The match creator can cancel the confirmation phase, clearing all votes, to re-enter a corrected result
+- **Admin overrides** — Administrators can correct the score on any confirmed match; every change is written to an append-only audit log with before/after snapshots
+- **Leaderboard — users** — Top players ranked by wins, filterable by `week`, `month`, `year`, or `total`
+- **Leaderboard — pairs** — Top 2-player pairs ranked by wins together, same time filters; pair identity is order-independent
+- **Azure AD SSO** — Login via corporate Microsoft account; no local password management
+- **Role management** — Admin status derived from Azure AD group membership (`ADMIN_AZURE_GROUP_ID`), synced to DB at each login and embedded in JWT
+- **Graph API fallback** — When Azure AD omits the `groups` claim (>150 groups), the app falls back to `GET /v1.0/me/memberOf` via Microsoft Graph
+- **Async events** — Match confirmation, leaderboard cache invalidation, and audit log writes are processed asynchronously by BullMQ with retry and dead-letter queue
+- **DLQ management** — Admins can list and retry failed BullMQ jobs via REST endpoints
+- **Swagger UI** — Interactive API docs at `GET /api/docs` with full request/response schemas, examples, and bearer auth support
 
 ---
 
@@ -153,13 +201,13 @@ foosball-api/
 | HTTP adapter | Fastify (replaces Express) |
 | Database | MySQL 8 |
 | ORM | TypeORM 0.3.x (migration-first, `synchronize: false`) |
-| Cache / Queue | Redis 7 |
+| Cache / Queue broker | Redis 7 |
 | Job queue | BullMQ 5.x |
-| Authentication | Azure AD (MSAL Node), internal JWT |
-| API docs | Swagger (`@nestjs/swagger`) at `/api/docs` |
+| Authentication | Azure AD via MSAL Node, internal JWT (15 min) + refresh token (24 h) |
+| API documentation | `@nestjs/swagger` at `/api/docs` |
 | Validation | `class-validator` + `class-transformer` |
 | Rate limiting | `@nestjs/throttler` |
-| Testing | Jest 30, Supertest |
+| Testing | Jest 30, Supertest, `ioredis-mock` |
 
 ---
 
@@ -167,116 +215,100 @@ foosball-api/
 
 ### App Registration requirements
 
-1. In the Azure Portal, open **Azure Active Directory > App registrations**.
-2. Create or select your App Registration for foosball-api.
-3. Under **Authentication**, add a redirect URI: `http://localhost:3001/auth/callback` (and your production URL).
+1. Open **Azure Active Directory > App registrations** in the Azure Portal.
+2. Create or select the App Registration for foosball-api.
+3. Under **Authentication**, add a redirect URI pointing to `apps/auth`:
+   - Development: `http://localhost:3001/auth/callback`
+   - Production: `https://<your-domain>/auth/callback`
 4. Under **Token configuration**, click **Add groups claim**:
-   - Select **Security groups** (or **All groups** if users may belong to distribution groups).
-   - Under **ID token**, enable the groups claim.
-   - Under **Access token**, enable the groups claim.
+   - Select **Security groups**.
+   - Enable the groups claim in **ID token** and **Access token**.
 5. Under **API permissions**, add:
-   - `GroupMember.Read.All` (or `Directory.Read.All`) — delegated — required for the Graph API fallback (see below).
+   - `GroupMember.Read.All` (delegated) — required for the Graph API fallback when a user belongs to more than 150 groups.
    - Grant admin consent for your tenant.
-6. Under **Certificates & secrets**, create a client secret. Copy it to `AZURE_CLIENT_SECRET` in `.env`.
+6. Under **Certificates & secrets**, create a client secret and copy its value to `AZURE_CLIENT_SECRET` in `.env`.
 
-### Groups claim caps and Graph API fallback
+### Groups claim cap and Graph API fallback
 
-Azure AD includes the `groups` claim in tokens only when the user belongs to **150 or fewer groups** (SAML/OIDC ID token) or **200 or fewer groups** (OAuth2 access token). For users exceeding this limit, Azure AD omits `groups` and adds `_claim_names` / `_claim_sources` to the token instead.
+Azure AD includes the `groups` claim only when the user belongs to 150 or fewer groups. For users exceeding this limit, Azure AD omits `groups` and includes `_claim_names`/`_claim_sources` instead.
 
-foosball-api detects the missing claim automatically and falls back to calling the Microsoft Graph API (`GET /v1.0/me/memberOf`) using the user's delegated access token. This fallback requires `GroupMember.Read.All` permission on the App Registration (see step 5 above).
-
-If the Graph API is unavailable during login, the user is authenticated but granted no admin role (safe default). The error is logged at `warn` level.
-
-### Required environment variables for Azure AD
-
-```
-AZURE_TENANT_ID          — Directory (tenant) ID from the App Registration overview
-AZURE_CLIENT_ID          — Application (client) ID from the App Registration overview
-AZURE_CLIENT_SECRET      — Client secret value (not the secret ID)
-AZURE_REDIRECT_URI       — Full callback URL, e.g. http://localhost:3001/auth/callback
-ADMIN_AZURE_GROUP_ID     — Object ID of the Azure AD group whose members become admins
-```
+The auth app detects this automatically and calls `GET /v1.0/me/memberOf` on the Microsoft Graph API using the user's delegated access token. If the Graph API is unavailable, the user is authenticated but receives no admin role (safe default). The error is logged at `warn` level.
 
 ---
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and fill in all values. The following table documents every variable:
+Copy `.env.example` to `.env` and fill in all required values.
 
-| Variable | Required | Description |
-|---|---|---|
-| `NODE_ENV` | Yes | `development`, `test`, or `production` |
-| `API_PORT` | No | HTTP port for `apps/api` (default: `3000`) |
-| `AUTH_PORT` | No | HTTP port for `apps/auth` (default: `3001`) |
-| **Database** | | |
-| `DB_HOST` | Yes | MySQL hostname (e.g., `localhost`) |
-| `DB_PORT` | No | MySQL port (default: `3306`) |
-| `DB_NAME` | Yes | Database name |
-| `DB_USER` | Yes | MySQL username |
-| `DB_PASSWORD` | Yes | MySQL password |
-| **Redis** | | |
-| `REDIS_HOST` | Yes | Redis hostname (e.g., `localhost`) |
-| `REDIS_PORT` | No | Redis port (default: `6379`) |
-| `REDIS_PASSWORD` | No | Redis password (leave empty if no auth) |
-| **Authentication** | | |
-| `APP_JWT_SECRET` | Yes | Secret for signing internal JWTs (min 32 chars, random) |
-| `APP_JWT_EXPIRY` | No | Internal JWT expiry (default: `900` seconds = 15 min) |
-| `APP_REFRESH_TOKEN_EXPIRY` | No | Refresh token expiry in seconds (default: `86400` = 24h) |
-| `AZURE_TENANT_ID` | Yes | Azure AD tenant ID |
-| `AZURE_CLIENT_ID` | Yes | Azure App Registration client ID |
-| `AZURE_CLIENT_SECRET` | Yes | Azure App Registration client secret |
-| `AZURE_REDIRECT_URI` | Yes | OAuth2 callback URL |
-| `ADMIN_AZURE_GROUP_ID` | Yes | Azure AD group Object ID for admin role |
-| **CORS** | | |
-| `CORS_ORIGINS` | No | Comma-separated allowed origins (empty = none) |
-| **Rate limiting** | | |
-| `THROTTLE_TTL` | No | Rate limit window in seconds (default: `60`) |
-| `THROTTLE_LIMIT` | No | Max requests per window per IP (default: `100`) |
-| **BullMQ** | | |
-| `BULLMQ_DLQ_NOTIFY_EMAIL` | No | Email for DLQ alert notifications (optional) |
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `NODE_ENV` | Yes | — | `development`, `test`, or `production` |
+| `LOG_LEVEL` | No | `debug` | Log verbosity level |
+| `API_PORT` | No | `3000` | HTTP port for `apps/api` |
+| `AUTH_PORT` | No | `3001` | HTTP port for `apps/auth` |
+| `DB_HOST` | Yes | — | MySQL hostname (e.g., `localhost`) |
+| `DB_PORT` | No | `3306` | MySQL port |
+| `DB_USER` | Yes | — | MySQL username |
+| `DB_PASSWORD` | Yes | — | MySQL password |
+| `DB_NAME` | Yes | — | MySQL database name |
+| `DB_ROOT_PASSWORD` | No | `rootpassword` | Root password for docker-compose MySQL init only |
+| `REDIS_HOST` | Yes | — | Redis hostname (e.g., `localhost`) |
+| `REDIS_PORT` | No | `6379` | Redis port |
+| `REDIS_PASSWORD` | No | (empty) | Redis password; leave empty for no-auth |
+| `JWT_SECRET` | Yes | — | Secret for signing internal JWTs — minimum 32 chars, never commit a real value |
+| `JWT_ACCESS_TTL` | No | `15m` | Internal access token TTL |
+| `JWT_REFRESH_TTL` | No | `24h` | Refresh token TTL |
+| `AZURE_TENANT_ID` | Yes | — | Azure AD Directory (tenant) ID |
+| `AZURE_CLIENT_ID` | Yes | — | Azure App Registration Application (client) ID |
+| `AZURE_CLIENT_SECRET` | Yes | — | Azure App Registration client secret value |
+| `AZURE_REDIRECT_URI` | Yes | — | Full OAuth2 callback URL (must match App Registration) |
+| `ADMIN_AZURE_GROUP_ID` | Yes | — | Object ID of the Azure AD group whose members become admins |
+| `CORS_ORIGINS` | No | (empty) | Comma-separated allowed CORS origins; empty means no browser clients |
 
 ---
 
 ## API Overview
 
-Swagger UI with full documentation, request/response schemas, and authentication is available at:
+Full interactive documentation is available at:
 
 ```
 http://localhost:3000/api/docs
 ```
 
-High-level endpoint groups:
+High-level endpoint groups (all under `/api/v1` except health and auth):
 
-| Group | Description |
+| Group | Endpoints |
 |---|---|
-| `POST /auth/login` | Initiates Azure AD OAuth2 flow |
-| `GET /auth/callback` | OAuth2 callback; issues internal JWT |
-| `POST /auth/refresh` | Refresh internal JWT using refresh token |
-| `GET/POST/PATCH /matches` | Match CRUD and player management |
-| `POST /matches/:id/confirm` | Submit confirmation vote (quorum mechanism) |
-| `DELETE /matches/:id/confirmation` | Creator cancels confirmation phase |
-| `GET /leaderboard/users` | Users leaderboard with time filters |
-| `GET /leaderboard/pairs` | Pairs leaderboard with time filters |
-| `PATCH /users/me` | Update own profile |
-| `GET /admin/dlq` | (Admin) List dead-letter queue jobs |
-| `POST /admin/dlq/:jobId/retry` | (Admin) Retry a DLQ job |
+| Health | `GET /health` |
+| Auth | `GET /auth/login`, `GET /auth/callback`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` |
+| Users | `GET /users/me`, `PATCH /users/me` |
+| Matches | `POST /matches`, `GET /matches`, `GET /matches/:id`, `PATCH /matches/:id`, `DELETE /matches/:id` |
+| Match players | `POST /matches/:id/players` |
+| Match result | `POST /matches/:id/result` |
+| Confirmations | `GET /matches/:id/confirmations`, `POST /matches/:id/confirmations`, `POST /matches/:id/confirmations/cancel` |
+| Leaderboard | `GET /leaderboard/users`, `GET /leaderboard/pairs` |
+| Admin | `PATCH /admin/matches/:id/result`, `DELETE /admin/matches/:id`, `GET /admin/matches/:id/audit`, `GET /admin/dlq`, `POST /admin/dlq/:jobId/retry` |
 
-Full schemas are defined in Phase 3 (`api.yaml`).
+All `/api/v1/*` endpoints require `Authorization: Bearer <access-token>` unless otherwise noted. Admin endpoints additionally require `is_admin: true` in the JWT payload.
+
+See [docs/API.md](docs/API.md) for the full endpoint reference.
 
 ---
 
 ## Database Overview
 
-Key tables (full schema defined in Phase 3 `schema.sql`):
+Schema managed by TypeORM migrations in `migrations/`. Key tables:
 
 | Table | Description |
 |---|---|
-| `users` | Registered users; `azure_oid` for SSO lookup; `is_admin` cache |
-| `matches` | Match records with type (1v1, 2v2, 4v4), status, and score |
-| `match_players` | Junction: players in each match with team assignment |
-| `confirmations` | Per-player confirmation votes for a match result |
-| `refresh_tokens` | Issued refresh tokens (single-use, 24h TTL) |
-| `audit_logs` | Append-only log of all admin overrides |
+| `users` | All authenticated users; `azure_oid` is the stable SSO lookup key; `is_admin` is a login-time cache of Azure AD group membership |
+| `refresh_tokens` | Issued refresh tokens (SHA-256 hash only); single-use rotation, 24 h TTL |
+| `matches` | Match records with type (1v1/2v2/4v4), status state machine, scores, and confirmed timestamp |
+| `match_players` | Players in each match with team (A/B), slot (1–4), and optional position label |
+| `match_confirmations` | Per-player confirmation votes; all rows deleted on creator cancel |
+| `audit_logs` | Append-only record of every admin override; preserves history even if the match is later deleted |
+
+Full DDL is in `.agentflow/architect/specs/schema.sql`.
 
 ---
 
@@ -292,8 +324,11 @@ Key tables (full schema defined in Phase 3 `schema.sql`):
 
 ## Local Development Notes
 
-- All apps share a single `node_modules/` at the root (monorepo workspace).
-- The `docker compose up -d` command starts MySQL 8 on port 3306 and Redis 7 on port 6379.
-- TypeORM migrations must be run manually with `npm run migration:run` after any schema change.
-- The `apps/auth` app runs on a separate port (3001) from `apps/api` (3000). The two apps are independent NestJS processes.
-- BullMQ queues use the Redis instance. The worker app must be running to process queued jobs.
+- All apps share a single `node_modules/` at the monorepo root.
+- `docker compose up -d` starts MySQL 8 on port 3306 and Redis 7 on port 6379 with named volumes for data persistence.
+- Run `npm run build` before any `migration:*` command — migrations execute from compiled JS in `dist/`.
+- `apps/api` (port 3000) and `apps/auth` (port 3001) are independent NestJS processes with separate bootstrap configurations.
+- `apps/worker` and `apps/producer` have no HTTP port; they connect to Redis for BullMQ.
+- The worker must be running for quorum confirmation events and leaderboard cache invalidation to process. In production all four processes must run simultaneously.
+- Unit tests use `ioredis-mock` for Redis and an in-memory SQLite-compatible DataSource — no real infrastructure needed.
+- End-to-end tests (`npm run test:e2e`) spin up a full NestJS application context against a real test database. Set `NODE_ENV=test` and configure a dedicated test DB in `.env` before running.
