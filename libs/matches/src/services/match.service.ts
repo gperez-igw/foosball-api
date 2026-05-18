@@ -5,6 +5,8 @@ import {
   ForbiddenException,
   BadRequestException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 import { MatchRepository } from '../repositories/match.repository.js';
 import { MatchEntity, MatchType } from '../entities/match.entity.js';
 import { MatchPlayerEntity } from '../entities/match-player.entity.js';
@@ -13,6 +15,14 @@ import { UpdateMatchDto } from '../dto/update-match.dto.js';
 import { AddPlayersDto } from '../dto/add-players.dto.js';
 import { SubmitResultDto } from '../dto/submit-result.dto.js';
 import { ListMatchesDto } from '../dto/list-matches.dto.js';
+import {
+  QUEUE_MATCHES,
+  defaultJobOptions,
+} from '@app/events';
+import type {
+  EventEnvelope,
+  MatchResultSubmittedPayload,
+} from '@app/events';
 
 const MATCH_CAPACITY: Record<MatchType, number> = {
   '1v1': 2,
@@ -22,7 +32,10 @@ const MATCH_CAPACITY: Record<MatchType, number> = {
 
 @Injectable()
 export class MatchService {
-  constructor(private readonly matchRepository: MatchRepository) {}
+  constructor(
+    private readonly matchRepository: MatchRepository,
+    @InjectQueue(QUEUE_MATCHES) private readonly matchesQueue: Queue,
+  ) {}
 
   async create(userId: number, dto: CreateMatchDto): Promise<MatchEntity> {
     const match = await this.matchRepository.create({
@@ -178,6 +191,21 @@ export class MatchService {
 
     const saved = await this.matchRepository.save(match);
     saved.players = players;
+
+    // Publish match.result_submitted event (fire-and-forget, non-blocking)
+    const event: EventEnvelope<MatchResultSubmittedPayload> = {
+      eventType: 'match.result_submitted',
+      version: 1,
+      occurredAt: new Date().toISOString(),
+      payload: {
+        matchId,
+        matchType: saved.matchType,
+        scoreA: dto.scoreA,
+        scoreB: dto.scoreB,
+      },
+    };
+    await this.matchesQueue.add('match.result_submitted', event, defaultJobOptions);
+
     return saved;
   }
 }

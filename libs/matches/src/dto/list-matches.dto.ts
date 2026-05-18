@@ -1,7 +1,7 @@
 import { IsEnum, IsInt, IsOptional, IsPositive, IsString, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { MatchType, MatchStatus } from '../entities/match.entity.js';
+import type { MatchType, MatchStatus } from '../entities/match.entity.js';
 
 export class ListMatchesDto {
   @ApiPropertyOptional({ enum: ['draft', 'playing', 'awaiting_confirmation', 'confirmed', 'cancelled'] })

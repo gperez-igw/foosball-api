@@ -5,10 +5,22 @@ import {
   ForbiddenException,
   InternalServerErrorException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 import { MatchRepository } from '../repositories/match.repository.js';
 import { MatchEntity } from '../entities/match.entity.js';
 import { AuditLogEntity } from '../entities/audit-log.entity.js';
 import { AdminOverrideResultDto } from '../dto/admin-override.dto.js';
+import {
+  QUEUE_AUDIT,
+  QUEUE_LEADERBOARD,
+  defaultJobOptions,
+} from '@app/events';
+import type {
+  EventEnvelope,
+  AuditLogPayload,
+  LeaderboardInvalidatePayload,
+} from '@app/events';
 
 export interface AdminOverrideResult {
   match: MatchEntity;
@@ -17,7 +29,11 @@ export interface AdminOverrideResult {
 
 @Injectable()
 export class AdminOverrideService {
-  constructor(private readonly matchRepository: MatchRepository) {}
+  constructor(
+    private readonly matchRepository: MatchRepository,
+    @InjectQueue(QUEUE_AUDIT) private readonly auditQueue: Queue,
+    @InjectQueue(QUEUE_LEADERBOARD) private readonly leaderboardQueue: Queue,
+  ) {}
 
   async overrideResult(
     matchId: number,
@@ -64,6 +80,35 @@ export class AdminOverrideService {
         afterData,
         reason: dto.reason ?? null,
       });
+
+      // Publish audit-log-write event — if this fails the whole transaction rolls back
+      const auditEvent: EventEnvelope<AuditLogPayload> = {
+        eventType: 'audit-log-write',
+        version: 1,
+        occurredAt: new Date().toISOString(),
+        payload: {
+          entityType: 'match',
+          entityId: matchId,
+          action: 'result_override',
+          actorId,
+          beforeData: beforeData as Record<string, unknown>,
+          afterData: afterData as Record<string, unknown>,
+          reason: dto.reason ?? null,
+        },
+      };
+      await this.auditQueue.add('audit-log-write', auditEvent, defaultJobOptions);
+
+      // Publish leaderboard-invalidate event (also part of the operation; rollback if fails)
+      const invalidateEvent: EventEnvelope<LeaderboardInvalidatePayload> = {
+        eventType: 'leaderboard-invalidate',
+        version: 1,
+        occurredAt: new Date().toISOString(),
+        payload: {
+          reason: 'admin.result_override',
+          affectedFilters: ['week', 'month', 'year', 'total'],
+        },
+      };
+      await this.leaderboardQueue.add('leaderboard-invalidate', invalidateEvent, defaultJobOptions);
 
       await queryRunner.commitTransaction();
 

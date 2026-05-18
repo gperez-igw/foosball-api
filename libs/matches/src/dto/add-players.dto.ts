@@ -1,7 +1,7 @@
 import { IsArray, IsEnum, IsInt, IsOptional, IsPositive, IsString, MaxLength, Min, Max, ValidateNested, ArrayMinSize, ArrayMaxSize } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
-import { Team } from '../entities/match-player.entity.js';
+import type { Team } from '../entities/match-player.entity.js';
 
 export class PlayerDto {
   @ApiProperty({ minimum: 1 })

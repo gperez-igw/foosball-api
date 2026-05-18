@@ -4,8 +4,21 @@ import {
   ConflictException,
   ForbiddenException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import type { Queue } from 'bullmq';
 import { MatchRepository } from '../repositories/match.repository.js';
 import { MatchConfirmationEntity } from '../entities/match-confirmation.entity.js';
+import {
+  QUEUE_MATCHES,
+  QUEUE_LEADERBOARD,
+  defaultJobOptions,
+} from '@app/events';
+import type {
+  EventEnvelope,
+  MatchConfirmedPayload,
+  MatchCancelledPayload,
+  LeaderboardInvalidatePayload,
+} from '@app/events';
 
 export interface ConfirmationStatusResult {
   matchId: number;
@@ -18,7 +31,11 @@ export interface ConfirmationStatusResult {
 
 @Injectable()
 export class ConfirmationService {
-  constructor(private readonly matchRepository: MatchRepository) {}
+  constructor(
+    private readonly matchRepository: MatchRepository,
+    @InjectQueue(QUEUE_MATCHES) private readonly matchesQueue: Queue,
+    @InjectQueue(QUEUE_LEADERBOARD) private readonly leaderboardQueue: Queue,
+  ) {}
 
   calculateQuorum(totalPlayers: number): number {
     return Math.floor(totalPlayers / 2) + 1;
@@ -94,6 +111,45 @@ export class ConfirmationService {
       match.confirmedAt = new Date();
       match.lockedAt = match.confirmedAt;
       await this.matchRepository.save(match);
+
+      // Determine winner team
+      const scoreA = match.scoreA ?? 0;
+      const scoreB = match.scoreB ?? 0;
+      let winnerTeam: 'A' | 'B' | 'draw';
+      if (scoreA > scoreB) {
+        winnerTeam = 'A';
+      } else if (scoreB > scoreA) {
+        winnerTeam = 'B';
+      } else {
+        winnerTeam = 'draw';
+      }
+
+      // Publish match.confirmed event
+      const confirmedEvent: EventEnvelope<MatchConfirmedPayload> = {
+        eventType: 'match.confirmed',
+        version: 1,
+        occurredAt: new Date().toISOString(),
+        payload: {
+          matchId,
+          winnerTeam,
+          scoreA,
+          scoreB,
+          confirmedAt: match.confirmedAt.toISOString(),
+        },
+      };
+      await this.matchesQueue.add('match.confirmed', confirmedEvent, defaultJobOptions);
+
+      // Publish leaderboard-invalidate event
+      const invalidateEvent: EventEnvelope<LeaderboardInvalidatePayload> = {
+        eventType: 'leaderboard-invalidate',
+        version: 1,
+        occurredAt: new Date().toISOString(),
+        payload: {
+          reason: 'match.confirmed',
+          affectedFilters: ['week', 'month', 'year', 'total'],
+        },
+      };
+      await this.leaderboardQueue.add('leaderboard-invalidate', invalidateEvent, defaultJobOptions);
     }
 
     return {
@@ -138,6 +194,18 @@ export class ConfirmationService {
     await this.matchRepository.deleteAllConfirmations(matchId);
     match.status = 'playing';
     await this.matchRepository.save(match);
+
+    // Publish match.confirmation_cancelled event (fire-and-forget)
+    const event: EventEnvelope<MatchCancelledPayload> = {
+      eventType: 'match.confirmation_cancelled',
+      version: 1,
+      occurredAt: new Date().toISOString(),
+      payload: {
+        matchId,
+        cancelledBy: userId,
+      },
+    };
+    await this.matchesQueue.add('match.confirmation_cancelled', event, defaultJobOptions);
 
     const players = await this.matchRepository.findPlayers(matchId);
     const quorumRequired = this.calculateQuorum(players.length);

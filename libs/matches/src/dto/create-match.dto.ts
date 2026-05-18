@@ -1,6 +1,6 @@
 import { IsEnum, IsOptional } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { MatchType } from '../entities/match.entity.js';
+import type { MatchType } from '../entities/match.entity.js';
 
 export class CreateMatchDto {
   @ApiPropertyOptional({ enum: ['1v1', '2v2', '4v4'], default: '2v2' })

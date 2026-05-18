@@ -10,6 +10,7 @@ import {
   ParseIntPipe,
   Req,
   HttpCode,
+  HttpStatus,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -47,6 +48,7 @@ export class MatchesController {
   ) {}
 
   @Post()
+  @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ operationId: 'createMatch', summary: 'Create a new match' })
   async createMatch(@Req() req: AuthRequest, @Body() dto: CreateMatchDto) {
     return this.matchService.create(req.user.sub, dto);
@@ -87,6 +89,7 @@ export class MatchesController {
   }
 
   @Post(':matchId/players')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ operationId: 'addPlayers', summary: 'Add players to a match' })
   @ApiParam({ name: 'matchId', type: 'integer' })
   async addPlayers(
@@ -98,6 +101,7 @@ export class MatchesController {
   }
 
   @Post(':matchId/result')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ operationId: 'submitResult', summary: 'Submit match result' })
   @ApiParam({ name: 'matchId', type: 'integer' })
   async submitResult(
@@ -116,6 +120,7 @@ export class MatchesController {
   }
 
   @Post(':matchId/confirmations')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ operationId: 'confirmResult', summary: 'Confirm match result (player vote)' })
   @ApiParam({ name: 'matchId', type: 'integer' })
   async confirmResult(@Req() req: AuthRequest, @Param('matchId', ParseIntPipe) matchId: number) {
@@ -123,6 +128,7 @@ export class MatchesController {
   }
 
   @Post(':matchId/confirmations/cancel')
+  @HttpCode(HttpStatus.OK)
   @ApiOperation({ operationId: 'cancelConfirmation', summary: 'Cancel confirmation phase' })
   @ApiParam({ name: 'matchId', type: 'integer' })
   async cancelConfirmation(@Req() req: AuthRequest, @Param('matchId', ParseIntPipe) matchId: number) {

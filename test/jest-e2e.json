@@ -7,13 +7,27 @@
     "^.+\\.ts$": ["ts-jest", { "tsconfig": "tsconfig.test.json" }]
   },
   "moduleNameMapper": {
+    "^(\\.{1,2}/.*)\\.js$": "$1",
+    "@app/common/(.+)\\.js$": "<rootDir>/../libs/common/src/$1",
     "@app/common/(.*)": "<rootDir>/../libs/common/src/$1",
+    "@app/database/(.+)\\.js$": "<rootDir>/../libs/database/src/$1",
     "@app/database/(.*)": "<rootDir>/../libs/database/src/$1",
+    "@app/events/(.+)\\.js$": "<rootDir>/../libs/events/src/$1",
     "@app/events/(.*)": "<rootDir>/../libs/events/src/$1",
+    "@app/events": "<rootDir>/../libs/events/src/index.ts",
+    "@app/matches/(.+)\\.js$": "<rootDir>/../libs/matches/src/$1",
     "@app/matches/(.*)": "<rootDir>/../libs/matches/src/$1",
+    "@app/matches": "<rootDir>/../libs/matches/src/index.ts",
+    "@app/leaderboard/(.+)\\.js$": "<rootDir>/../libs/leaderboard/src/$1",
     "@app/leaderboard/(.*)": "<rootDir>/../libs/leaderboard/src/$1",
+    "@app/leaderboard": "<rootDir>/../libs/leaderboard/src/index.ts",
+    "@app/auth/(.+)\\.js$": "<rootDir>/../libs/auth/src/$1",
     "@app/auth/(.*)": "<rootDir>/../libs/auth/src/$1",
+    "@app/auth": "<rootDir>/../libs/auth/src/index.ts",
+    "@app/users/(.+)\\.js$": "<rootDir>/../libs/users/src/$1",
     "@app/users/(.*)": "<rootDir>/../libs/users/src/$1",
+    "@app/users": "<rootDir>/../libs/users/src/index.ts",
+    "@app/jobs/(.+)\\.js$": "<rootDir>/../libs/jobs/src/$1",
     "@app/jobs/(.*)": "<rootDir>/../libs/jobs/src/$1"
   }
 }

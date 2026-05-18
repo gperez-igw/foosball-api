@@ -2,10 +2,12 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { BullModule } from '@nestjs/bullmq';
 import { APP_GUARD, APP_FILTER } from '@nestjs/core';
 import { MatchesModule } from '@app/matches';
 import { LeaderboardModule } from '@app/leaderboard';
 import { AuthModule, JwtAuthGuard } from '@app/auth';
+import { DlqInspectorModule } from '@app/events';
 import { UserEntity } from '@app/users/user.entity.js';
 import { RefreshTokenEntity } from '@app/auth/refresh-token.entity.js';
 import { MatchEntity } from '@app/matches/entities/match.entity.js';
@@ -44,10 +46,21 @@ import { AllExceptionsFilter } from './filters/http-exception.filter.js';
         logging: config.get('NODE_ENV') === 'development',
       }),
     }),
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: config.get<number>('REDIS_PORT', 6379),
+          password: config.get<string>('REDIS_PASSWORD') || undefined,
+        },
+      }),
+    }),
     ThrottlerModule.forRoot([{ name: 'global', ttl: 60000, limit: 100 }]),
     AuthModule,
     MatchesModule,
     LeaderboardModule,
+    DlqInspectorModule,
   ],
   controllers: [HealthController, MatchesController, LeaderboardController, AdminController],
   providers: [
