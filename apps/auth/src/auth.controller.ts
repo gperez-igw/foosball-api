@@ -9,15 +9,19 @@ import {
   HttpCode,
   HttpStatus,
   BadRequestException,
+  UseGuards,
 } from '@nestjs/common';
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyReply } from 'fastify';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from '@app/auth/auth.service.js';
 import { UserService } from '@app/users/user.service.js';
 import { JwtAuthGuard } from '@app/auth/jwt-auth.guard.js';
 import { Public } from '@app/auth/public.decorator.js';
-import { UseGuards } from '@nestjs/common';
 import type { JwtPayload } from '@app/auth/token.service.js';
+
+interface AuthRequest {
+  user: JwtPayload;
+}
 
 @Controller('auth')
 @UseGuards(JwtAuthGuard)
@@ -72,7 +76,7 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async logout(@Req() req: FastifyRequest, @Body() body: { refreshToken?: string }): Promise<void> {
+  async logout(@Req() req: AuthRequest, @Body() body: { refreshToken?: string }): Promise<void> {
     if (!body?.refreshToken) {
       throw new BadRequestException({
         code: 'VALIDATION_ERROR',
@@ -83,8 +87,8 @@ export class AuthController {
   }
 
   @Get('me')
-  async me(@Req() req: FastifyRequest) {
-    const user = req.user as JwtPayload;
+  async me(@Req() req: AuthRequest) {
+    const user = req.user;
     const entity = await this.userService.findById(user.sub);
     return {
       id: entity.id,

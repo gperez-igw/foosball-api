@@ -7,10 +7,13 @@ import {
   UseGuards,
   BadRequestException,
 } from '@nestjs/common';
-import type { FastifyRequest } from 'fastify';
 import { JwtAuthGuard } from '@app/auth/jwt-auth.guard.js';
 import { UserService } from '@app/users/user.service.js';
 import type { JwtPayload } from '@app/auth/token.service.js';
+
+interface AuthRequest {
+  user: JwtPayload;
+}
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
@@ -18,8 +21,8 @@ export class UsersController {
   constructor(private readonly userService: UserService) {}
 
   @Get('me')
-  async getProfile(@Req() req: FastifyRequest) {
-    const user = req.user as JwtPayload;
+  async getProfile(@Req() req: AuthRequest) {
+    const user = req.user;
     const entity = await this.userService.findById(user.sub);
     return {
       id: entity.id,
@@ -31,7 +34,7 @@ export class UsersController {
   }
 
   @Patch('me')
-  async updateProfile(@Req() req: FastifyRequest, @Body() body: { displayName?: string }) {
+  async updateProfile(@Req() req: AuthRequest, @Body() body: { displayName?: string }) {
     if (!body?.displayName) {
       throw new BadRequestException({
         code: 'VALIDATION_ERROR',
@@ -39,7 +42,7 @@ export class UsersController {
       });
     }
 
-    const user = req.user as JwtPayload;
+    const user = req.user;
     const updated = await this.userService.updateDisplayName(user.sub, body.displayName);
     return {
       id: updated.id,
