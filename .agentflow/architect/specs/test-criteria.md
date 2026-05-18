@@ -341,33 +341,36 @@ And   GET /api/v1/admin/matches/X/audit returns 2 entries (both preserved)
 
 ---
 
-## SCENARIO 6 — Azure SSO login: token validated, role assigned from Azure AD group
+## SCENARIO 6 — Azure SSO login: token validated, is_admin sourced from DB
 
 **Test file**: `test/auth-sso.e2e-spec.ts`
 **Owned by**: backend-auth, QA
 
-### 6a. Successful login flow with groups claim present
+### 6a. New user login — is_admin defaults to false
 
 ```gherkin
 Given a valid Azure AD authorization code (stub: mock MSAL in test environment)
-And   the decoded OIDC token contains groups = [ADMIN_AZURE_GROUP_ID, "other-group-id"]
+And   the decoded OIDC token contains { oid, preferred_username, name }
+And   no user row exists in the DB for this azure_oid
 
-When  GET /auth/callback?code=...&state=...
+When  GET /connect?code=...&state=...
 Then  response status is 200
 And   response body has { accessToken, refreshToken, expiresIn: 900 }
-And   the JWT payload (decoded) contains { is_admin: true, email, sub }
-And   users table has a row with is_admin=1 for this azure_oid
+And   the JWT payload (decoded) contains { is_admin: false, email, sub }
+And   users table has a new row with is_admin=0 for this azure_oid
 And   refresh_tokens table has a new row (used_at IS NULL)
 ```
 
-### 6b. Regular user (not in admin group)
+### 6b. Existing admin user — is_admin preserved from DB
 
 ```gherkin
-Given a valid OIDC token with groups = ["other-group-id"] (no admin group)
-When  GET /auth/callback?code=...&state=...
+Given a user row already exists in the DB with is_admin=1 for azure_oid=X
+And   a valid OIDC token for the same azure_oid=X
+
+When  GET /connect?code=...&state=...
 Then  response status is 200
-And   JWT payload contains { is_admin: false }
-And   users.is_admin = 0
+And   JWT payload contains { is_admin: true }
+And   users.is_admin remains 1 (upsert did NOT overwrite it)
 ```
 
 ### 6c. GET /auth/me returns correct profile
@@ -405,34 +408,10 @@ Then  response status is 401
 And   response body error.code = "INVALID_REFRESH_TOKEN"
 ```
 
-### 6f. Graph API fallback when groups claim absent
+### 6f. Logout invalidates refresh token
 
 ```gherkin
-Given an OIDC token where groups claim is absent
-And   the token has _claim_names.groups (indicating cap exceeded)
-And   the Microsoft Graph mock returns [ADMIN_AZURE_GROUP_ID] for /v1.0/me/memberOf
-
-When  GET /auth/callback?code=...
-Then  response status is 200
-And   JWT payload contains { is_admin: true }
-And   users.is_admin = 1
-```
-
-### 6g. Graph API unavailable fallback
-
-```gherkin
-Given groups claim absent (cap exceeded)
-And   Microsoft Graph API mock returns 503
-
-When  GET /auth/callback?code=...
-Then  response status is 503
-And   response body error.code = "AZURE_GRAPH_UNAVAILABLE"
-```
-
-### 6h. Logout invalidates refresh token
-
-```gherkin
-Given user has a valid refreshToken T1
+Given a user logged in (holds accessToken + refreshToken T1)
 
 When  POST /auth/logout { refreshToken: T1 } (with valid Bearer)
 Then  response status is 204
@@ -440,6 +419,124 @@ Then  response status is 204
 When  POST /auth/refresh { refreshToken: T1 }
 Then  response status is 401
 ```
+
+---
+
+## SCENARIO 6b — Mobile OAuth2 code exchange (Flow B)
+
+**Test file**: `test/auth-mobile-exchange.e2e-spec.ts` (new) and unit additions in existing spec files
+**Owned by**: backend-auth (primary), QA (execution)
+
+### 6b-1. GET /auth/login?client=mobile returns JSON url
+
+```gherkin
+Given the auth service is running with AZURE_MOBILE_REDIRECT_URI configured
+
+When  GET /auth/login?client=mobile
+Then  response status is 200
+And   response body has { url: string }
+And   url contains "redirect_uri=foosball%3A%2F%2Fauth%2Fcallback" (or the configured value URL-encoded)
+And   url contains "client_id=<AZURE_CLIENT_ID>"
+```
+
+### 6b-2. GET /auth/login (no client param) still returns 302 — web flow unchanged
+
+```gherkin
+Given the auth service is running
+
+When  GET /auth/login  (no query params)
+Then  response status is 302
+And   Location header starts with "https://login.microsoftonline.com/"
+```
+
+### 6b-3. GET /auth/login?client=web returns 302 — explicit web flow
+
+```gherkin
+When  GET /auth/login?client=web
+Then  response status is 302
+And   Location header is present and starts with "https://login.microsoftonline.com/"
+```
+
+### 6b-4. POST /connect/exchange — happy path (new user)
+
+```gherkin
+Given MSAL is stubbed to return a valid AuthenticationResult for code="valid-code" state="valid-state"
+  with idTokenClaims: { oid: "oid-mobile-1", preferred_username: "mobile@company.com", name: "Mobile User" }
+And   no user row exists for azure_oid="oid-mobile-1"
+
+When  POST /connect/exchange { code: "valid-code", state: "valid-state" }
+Then  response status is 200
+And   response body has { accessToken, refreshToken, expiresIn: 900 }
+And   users table has a new row with email="mobile@company.com", is_admin=0
+And   refresh_tokens table has a new row (used_at IS NULL)
+And   JWT payload (decoded) contains { is_admin: false, email: "mobile@company.com" }
+```
+
+### 6b-5. POST /connect/exchange — existing admin user, is_admin preserved
+
+```gherkin
+Given a user row exists with azure_oid="oid-admin-mobile", is_admin=1
+And   MSAL stub returns idTokenClaims with oid="oid-admin-mobile"
+
+When  POST /connect/exchange { code: "valid-code", state: "valid-state" }
+Then  response status is 200
+And   JWT payload contains { is_admin: true }
+And   users.is_admin remains 1 (upsert did NOT overwrite it)
+```
+
+### 6b-6. POST /connect/exchange — missing code rejected
+
+```gherkin
+When  POST /connect/exchange { state: "valid-state" }  (no code field)
+Then  response status is 400
+And   response body error.code = "INVALID_CALLBACK"
+```
+
+### 6b-7. POST /connect/exchange — missing state rejected
+
+```gherkin
+When  POST /connect/exchange { code: "valid-code" }  (no state field)
+Then  response status is 400
+And   response body error.code = "INVALID_CALLBACK"
+```
+
+### 6b-8. POST /connect/exchange — empty code rejected
+
+```gherkin
+When  POST /connect/exchange { code: "", state: "valid-state" }
+Then  response status is 400
+And   response body error.code = "INVALID_CALLBACK"
+```
+
+### 6b-9. POST /connect/exchange — MSAL rejects code (expired/already used)
+
+```gherkin
+Given MSAL stub throws an error for code="stale-code" (expired or already consumed)
+
+When  POST /connect/exchange { code: "stale-code", state: "valid-state" }
+Then  response status is 401
+And   response body error.code = "MOBILE_EXCHANGE_FAILED"
+```
+
+### 6b-10. POST /connect/exchange — MSAL rejects redirect_uri mismatch
+
+```gherkin
+Given MSAL is configured with AZURE_MOBILE_REDIRECT_URI="foosball://auth/callback"
+And   MSAL stub simulates a redirect_uri_mismatch error
+
+When  POST /connect/exchange { code: "some-code", state: "valid-state" }
+Then  response status is 401
+And   response body error.code = "MOBILE_EXCHANGE_FAILED"
+```
+
+### Unit test additions (backend-auth)
+
+| File | New test cases |
+|------|---------------|
+| `libs/auth/src/azure-ad.service.spec.ts` | `getAuthCodeUrl(webUri)` uses webUri; `getAuthCodeUrl(mobileUri)` uses mobileUri; `exchangeCode(code, state, mobileUri)` passes mobileUri to MSAL |
+| `libs/auth/src/auth.service.spec.ts` | `getLoginUrl('web')` calls `getAuthCodeUrl(webUri)`; `getLoginUrl('mobile')` calls `getAuthCodeUrl(mobileUri)`; `handleMobileExchange(code, state)` calls `exchangeCode(..., mobileUri)` then upserts user and returns TokenPair |
+| `apps/auth/src/connect.controller.spec.ts` | `POST /connect/exchange` with valid body → 200 TokenPair; missing `code` → 400; missing `state` → 400; MSAL error → 401 |
+| `apps/auth/src/auth.controller.spec.ts` | `GET /auth/login?client=mobile` returns 200 JSON `{ url }`; `GET /auth/login?client=web` returns 302; default (no param) returns 302 |
 
 ---
 
@@ -549,45 +646,14 @@ And   response body error.code = "VALIDATION_ERROR"
 
 ---
 
-## SCENARIO 8 — Graph API fallback when groups claim absent (extended)
-
-**Test file**: Covered in `test/auth-sso.e2e-spec.ts` (scenarios 6f + 6g above)
-**Owned by**: backend-auth, QA
-
-This scenario is already covered in detail in SCENARIO 6f and 6g.
-Additional unit test in `libs/auth/src/graph-groups.service.spec.ts`:
-
-### 8a. GraphGroupsService unit: returns groups from Graph API
-
-```gherkin
-Given GraphGroupsService is initialized with a valid delegated access token mock
-When  service.getMemberOf(accessToken) is called
-Then  returns an array of group IDs from the mock Graph response
-```
-
-### 8b. GraphGroupsService unit: retries once on transient 503, then propagates error
-
-```gherkin
-Given Graph API mock returns 503 on first call, then 200 on second call
-When  service.getMemberOf(accessToken) is called
-Then  result is the group IDs from the second call (retry succeeded)
-
-Given Graph API mock returns 503 on both attempts
-When  service.getMemberOf(accessToken) is called
-Then  throws an error with code AZURE_GRAPH_UNAVAILABLE
-```
-
----
-
 ## UNIT TEST REQUIREMENTS (per implementer)
 
 ### backend-auth owns (MatchService coverage embedded here)
 
 | File | Required unit tests | Coverage target |
 |------|---------------------|-----------------|
-| `libs/auth/src/msal.strategy.spec.ts` | validates token, extracts claims, handles missing groups | 80%+ |
-| `libs/auth/src/graph-groups.service.spec.ts` | Graph call, retry, cap detection | 80%+ |
-| `libs/users/src/user.service.spec.ts` | upsert on login, is_admin sync, displayName update | 80%+ |
+| `libs/auth/src/msal.strategy.spec.ts` | validates token, extracts claims (oid/email/name only) | 80%+ |
+| `libs/users/src/user.service.spec.ts` | upsert on login (new user → is_admin=false; existing → is_admin preserved), displayName update | 80%+ |
 | `libs/auth/src/refresh-token.service.spec.ts` | issue, validate, single-use rotation, expiry | 80%+ |
 
 ### backend-api owns

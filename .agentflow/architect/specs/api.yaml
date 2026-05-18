@@ -376,20 +376,59 @@ paths:
     get:
       operationId: authLogin
       tags: [auth]
-      summary: Initiate Azure SSO login
+      summary: Initiate Azure SSO login (web or mobile)
       description: |
-        Redirects the client to the Azure AD authorization endpoint.
-        The client follows the redirect; this endpoint does not return JSON.
+        **Web client** (default, `client` omitted or `client=web`):
+        Redirects (302) to the Azure AD authorization endpoint with
+        `redirect_uri = AZURE_REDIRECT_URI` (e.g. `http://localhost:3001/connect`).
+        The browser follows the redirect automatically.
+
+        **Mobile/Tauri client** (`client=mobile`):
+        Returns HTTP 200 JSON `{ url }` containing the Azure authorize URL built
+        with `redirect_uri = AZURE_MOBILE_REDIRECT_URI` (e.g. `foosball://auth/callback`).
+        The app opens this URL via the OS shell so the custom-scheme deep-link handler
+        is triggered after Azure login.
+
+        A 302 is NOT used for the mobile variant because a Tauri fetch() call cannot
+        intercept a redirect to a custom scheme — JSON lets the app call open(url).
+
         Rate limited: 10 req/min per IP.
       security: []
+      parameters:
+        - name: client
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [web, mobile]
+            default: web
+          description: |
+            `web` (default) — returns 302 redirect.
+            `mobile` — returns 200 JSON { url }.
       responses:
         "302":
-          description: Redirect to Azure AD login page
+          description: |
+            Web flow — redirect to Azure AD login page.
+            Only returned when `client` is `web` or omitted.
           headers:
             Location:
               schema:
                 type: string
                 example: "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?..."
+        "200":
+          description: |
+            Mobile flow — Azure authorize URL as JSON.
+            Only returned when `client=mobile`.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url]
+                properties:
+                  url:
+                    type: string
+                    description: Full Azure AD authorize URL. Open via OS shell.
+                    example: "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize?client_id=...&redirect_uri=foosball%3A%2F%2Fauth%2Fcallback&..."
         "429":
           description: Too Many Requests
           content:
@@ -408,11 +447,12 @@ paths:
       summary: Azure SSO OAuth2 callback
       description: |
         Azure AD redirects here after user authentication.
-        apps/auth validates the OIDC token, syncs user + is_admin to DB,
-        issues internal JWT + refresh token pair.
-        Returns TokenPair on success; redirects or returns error on failure.
-        Groups claim cap fallback: if `_claim_names.groups` present in token,
-        falls back to Microsoft Graph GET /v1.0/me/memberOf for group resolution.
+        apps/auth validates the OIDC token, upserts user identity (oid, email,
+        displayName) in DB, and issues an internal JWT + refresh token pair.
+        is_admin is sourced from the DB user row — never derived from Azure groups.
+        A new user is created with is_admin=false (DB default).
+        An existing user keeps the stored is_admin value unchanged.
+        Returns TokenPair on success; returns error on failure.
       security: []
       parameters:
         - name: code
@@ -451,16 +491,101 @@ paths:
                 error:
                   code: INVALID_CALLBACK
                   message: Missing or invalid authorization code
-        "503":
-          description: Azure Graph API unavailable (groups claim fallback failed)
+
+  /connect/exchange:
+    post:
+      operationId: mobileCodeExchange
+      tags: [auth]
+      summary: Mobile OAuth2 code exchange (Flow B)
+      description: |
+        **Mobile/Tauri-only endpoint.** Public — no Bearer token required.
+
+        After the user completes Azure login and Azure redirects to the deep link
+        `foosball://auth/callback?code=...&state=...`, the Tauri app POSTs the
+        `code` and `state` to this endpoint.
+
+        The backend (confidential client) exchanges the code with Azure using
+        `AZURE_MOBILE_REDIRECT_URI` as `redirect_uri` (must match the value used
+        when building the authorize URL). The client secret never leaves the backend.
+
+        **State / CSRF**: the `state` value is forwarded verbatim to MSAL's
+        `acquireTokenByCode`. MSAL performs nonce validation internally.
+
+        **PKCE**: not required — the backend is a confidential client holding
+        `AZURE_CLIENT_SECRET`; PKCE is a mitigation for public clients only.
+
+        On success the user is upserted in the DB (same logic as GET /connect)
+        and the token pair is returned. `is_admin` is sourced from the DB row.
+
+        Rate limited: 20 req/min per IP (ThrottlerModule).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, state]
+              properties:
+                code:
+                  type: string
+                  minLength: 1
+                  maxLength: 2048
+                  description: Authorization code received in the deep-link query string.
+                  example: "0.AX4A..."
+                state:
+                  type: string
+                  minLength: 1
+                  maxLength: 512
+                  description: State nonce echoed back by Azure — must match the value from the authorize URL.
+                  example: "abc123nonce"
+            example:
+              code: "0.AX4A..."
+              state: "abc123nonce"
+      responses:
+        "200":
+          description: Code exchanged successfully — returns JWT + refresh token pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+              example:
+                accessToken: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                refreshToken: "dGhpcyBpcyBhIHJhbmRvbSByZWZyZXNoIHRva2Vu"
+                expiresIn: 900
+        "400":
+          description: Missing or invalid `code` / `state` fields
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error:
-                  code: AZURE_GRAPH_UNAVAILABLE
-                  message: Could not resolve group membership via Microsoft Graph
+                  code: INVALID_CALLBACK
+                  message: Missing or invalid authorization code
+        "401":
+          description: |
+            MSAL rejected the code — expired, already used, or `redirect_uri` mismatch.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: MOBILE_EXCHANGE_FAILED
+                  message: Azure AD rejected the authorization code
+        "429":
+          description: Too Many Requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected MSAL or database error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /auth/refresh:
     post:
@@ -605,7 +730,8 @@ paths:
       summary: Update authenticated user display name
       description: |
         Users can only update their own displayName.
-        email and isAdmin are read-only (managed by Azure AD sync).
+        email is read-only (sourced from Azure AD token).
+        isAdmin is read-only via API (managed directly in the database).
       security:
         - bearerAuth: []
       requestBody:

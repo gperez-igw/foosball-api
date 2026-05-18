@@ -44,15 +44,16 @@ requires_decision: false
 -- TABLE: users
 -- Stores every authenticated user. Upserted on each Azure SSO login.
 -- azure_oid is the stable Azure Object ID — primary SSO lookup key.
--- is_admin is a DB cache of the Azure AD group membership: synced at login,
--- embedded in JWT payload (no DB call on hot request path).
+-- is_admin is a plain DB column managed manually (direct SQL); NOT derived from
+-- Azure AD groups. New users are created with DEFAULT 0. The login upsert
+-- never overwrites this value. Embedded in JWT payload at login time.
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
   id            BIGINT UNSIGNED     NOT NULL AUTO_INCREMENT,
   azure_oid     VARCHAR(36)         NOT NULL COMMENT 'Azure AD Object ID (UUID format)',
   email         VARCHAR(255)        NOT NULL,
   display_name  VARCHAR(255)        NOT NULL,
-  is_admin      TINYINT(1)          NOT NULL DEFAULT 0 COMMENT 'Cache of Azure AD group membership; 0=user 1=admin',
+  is_admin      TINYINT(1)          NOT NULL DEFAULT 0 COMMENT 'DB-managed admin flag; 0=user 1=admin. Set via direct SQL only.',
   created_at    DATETIME(3)         NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at    DATETIME(3)         NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
 
