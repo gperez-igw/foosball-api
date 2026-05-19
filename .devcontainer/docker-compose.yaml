@@ -10,12 +10,17 @@ services:
     depends_on:
       - redis
       - mysql
+    ports:
+      - 3000:3000
+      - 8000:8000
 
   redis:
     image: redis:7.0
     restart: unless-stopped
     volumes:
       - redis-data:/data
+    ports:
+      - 6379:6379
 
   mysql:
     image: mysql:8.0
@@ -27,6 +32,8 @@ services:
       MYSQL_DATABASE: foosball
       MYSQL_USER: foosball
       MYSQL_PASSWORD: password
+    ports:
+      - 3306:3306
 
 volumes:
   redis-data:

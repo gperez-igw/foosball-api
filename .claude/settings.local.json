@@ -34,7 +34,8 @@
       "Bash(git -C /workspaces/foosball commit -m ' *)",
       "Bash(./node_modules/.bin/tsc --project apps/auth/tsconfig.app.json --noEmit)",
       "Bash(git -C /workspaces/foosball status)",
-      "Bash(git -C /workspaces/foosball add apps/auth/src/auth.controller.ts apps/auth/src/auth.controller.spec.ts apps/auth/src/connect.controller.ts apps/auth/src/connect.controller.spec.ts libs/auth/src/auth.service.ts libs/auth/src/auth.service.spec.ts libs/auth/src/azure-ad.service.ts libs/auth/src/azure-ad.service.spec.ts libs/auth/src/msal.strategy.spec.ts test/auth-sso.e2e-spec.ts .agentflow/teams/team-01/backend/progress-auth.md)"
+      "Bash(git -C /workspaces/foosball add apps/auth/src/auth.controller.ts apps/auth/src/auth.controller.spec.ts apps/auth/src/connect.controller.ts apps/auth/src/connect.controller.spec.ts libs/auth/src/auth.service.ts libs/auth/src/auth.service.spec.ts libs/auth/src/azure-ad.service.ts libs/auth/src/azure-ad.service.spec.ts libs/auth/src/msal.strategy.spec.ts test/auth-sso.e2e-spec.ts .agentflow/teams/team-01/backend/progress-auth.md)",
+      "Bash(echo \"exit: $?\")"
     ]
   }
 }

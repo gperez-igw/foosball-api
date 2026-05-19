@@ -4,7 +4,7 @@ import type { Job } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { QUEUE_LEADERBOARD } from '@app/events';
 import type { EventEnvelope, LeaderboardInvalidatePayload } from '@app/events';
-import { WORKER_REDIS } from '../app.module.js';
+import { WORKER_REDIS } from '../constants.js';
 
 const CACHE_KEY_PREFIX = process.env['QUEUE_PREFIX'] ?? 'leaderboard';
 

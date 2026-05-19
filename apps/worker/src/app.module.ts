@@ -8,8 +8,7 @@ import { AuditLogEntity } from '@app/matches/entities/audit-log.entity';
 import { MatchConfirmedProcessor } from './processors/match-confirmed.processor.js';
 import { LeaderboardInvalidateProcessor } from './processors/leaderboard-invalidate.processor.js';
 import { AuditLogProcessor } from './processors/audit-log.processor.js';
-
-export const WORKER_REDIS = 'WORKER_REDIS';
+import { WORKER_REDIS } from './constants.js';
 
 @Module({
   imports: [
@@ -30,12 +29,15 @@ export const WORKER_REDIS = 'WORKER_REDIS';
       }),
     }),
     TypeOrmModule.forFeature([AuditLogEntity]),
-    BullModule.forRoot({
-      connection: {
-        host: process.env['REDIS_HOST'] ?? 'localhost',
-        port: parseInt(process.env['REDIS_PORT'] ?? '6379', 10),
-        password: process.env['REDIS_PASSWORD'] || undefined,
-      },
+    BullModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: config.get<number>('REDIS_PORT', 6379),
+          password: config.get<string>('REDIS_PASSWORD') || undefined,
+        },
+      }),
     }),
     BullModule.registerQueue(
       { name: QUEUE_MATCHES, defaultJobOptions },

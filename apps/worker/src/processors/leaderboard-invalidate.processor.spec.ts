@@ -4,7 +4,7 @@ import { LeaderboardInvalidateProcessor } from './leaderboard-invalidate.process
 import type { Job } from 'bullmq';
 import type { EventEnvelope, LeaderboardInvalidatePayload } from '@app/events';
 import { QUEUE_LEADERBOARD } from '@app/events';
-import { WORKER_REDIS } from '../app.module';
+import { WORKER_REDIS } from '../constants';
 
 function makeJob(
   overrides: Partial<EventEnvelope<LeaderboardInvalidatePayload>> = {},

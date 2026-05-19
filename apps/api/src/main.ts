@@ -14,6 +14,7 @@ async function bootstrap(): Promise<void> {
 
   await app.register(fastifyCors, {
     origin: process.env.CORS_ORIGINS?.split(',') ?? false,
+    methods: ['GET', 'HEAD', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   });
 
   app.setGlobalPrefix('api/v1');

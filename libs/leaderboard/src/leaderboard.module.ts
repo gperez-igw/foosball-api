@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { getDataSourceToken } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 import { LeaderboardRepository } from './leaderboard.repository.js';
 import { LeaderboardService, LEADERBOARD_REDIS } from './leaderboard.service.js';
@@ -10,10 +11,12 @@ import { LeaderboardService, LEADERBOARD_REDIS } from './leaderboard.service.js'
     LeaderboardRepository,
     {
       provide: LEADERBOARD_REDIS,
-      useFactory: () => {
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
         return new Redis({
-          host: process.env.REDIS_HOST ?? 'localhost',
-          port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
+          host: config.get<string>('REDIS_HOST', 'localhost'),
+          port: config.get<number>('REDIS_PORT', 6379),
+          password: config.get<string>('REDIS_PASSWORD') || undefined,
         });
       },
     },
